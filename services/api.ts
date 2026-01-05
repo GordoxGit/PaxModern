@@ -1,22 +1,121 @@
-import { Country, Game, Message } from '../types';
+import { Country, Message } from '../types';
+import { GoogleGenerativeAI as GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
-// === CONFIGURATION ===
-const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || '';
-const SITE_URL = 'http://localhost:3000';
-const SITE_NAME = 'Pax Modern';
+// === CONFIGURATION DES CLÉS (Sécurité : Vérifie qu'elles existent) ===
+const KEYS = {
+  GOOGLE: import.meta.env.VITE_GOOGLE_API_KEY,
+  GROQ: import.meta.env.VITE_GROQ_API_KEY,
+  MISTRAL: import.meta.env.VITE_MISTRAL_API_KEY
+};
 
-// === 1. LE CERVEAU (Fixe pour le Conseiller) ===
-// Modèle de haute intelligence pour l'analyse stratégique
-const ADVISOR_MODEL = 'deepseek/deepseek-v3.2';
+// === LE CASTING GRATUIT ===
+const MODELS = {
+  // CONSEILLER : Gemini 1.5 Flash (Google)
+  // Pourquoi ? 1 Million de tokens de contexte GRATUIT. Il se souvient de tout.
+  ADVISOR: 'gemini-1.5-flash',
 
-// === 2. LE POOL DIPLOMATIQUE (Rotation Aléatoire) ===
-// Ces modèles tourneront aléatoirement pour les dialogues des pays
-const DIPLOMACY_POOL = [
-  'google/gemini-2.5-flash',          // Rapide & Efficace
-  'xiaomi/mimo-v2-flash-20251210',    // Optimisé Mobile/Web
-  'deepseek/deepseek-chat-v3-0324',   // V3 Legacy stable
-  'tngtech/deepseek-r1t2-chimera'     // Créatif & Non-censuré
-];
+  // DIPLOMATE : Llama 3.3 70B (via Groq)
+  // Pourquoi ? C'est le plus rapide du monde (500 tokens/sec) et gratuit actuellement.
+  DIPLOMAT: 'llama-3.3-70b-versatile',
+
+  // SECOURS : Mistral Nemo (Mistral)
+  // Pourquoi ? Très bon en français si les autres plantent.
+  FALLBACK: 'open-mistral-nemo'
+};
+
+// === 1. MOTEUR GOOGLE (Direct) ===
+const callGoogle = async (systemPrompt: string, history: Message[], temperature: number) => {
+  if (!KEYS.GOOGLE) return null;
+  const ai = new GoogleGenAI(KEYS.GOOGLE);
+  try {
+    const model = ai.getGenerativeModel({
+      model: MODELS.ADVISOR,
+      systemInstruction: systemPrompt,
+      safetySettings: [{ category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }]
+    });
+
+    // Conversion format Google
+    const chat = model.startChat({
+      history: history.map(m => ({
+        role: m.from === 'player' ? 'user' : 'model',
+        parts: [{ text: m.content }]
+      }))
+    });
+
+    const result = await chat.sendMessage("Analyse et réponds.");
+    return result.response.text();
+  } catch (e) {
+    console.error("Google Error:", e);
+    return null;
+  }
+};
+
+// === 2. MOTEUR GROQ (Direct - Compatible OpenAI) ===
+const callGroq = async (systemPrompt: string, history: Message[], temperature: number) => {
+  if (!KEYS.GROQ) return null;
+  try {
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map(m => ({ role: m.from === 'player' ? 'user' : 'assistant', content: m.content }))
+    ];
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${KEYS.GROQ}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODELS.DIPLOMAT,
+        messages: messages,
+        temperature: temperature,
+        max_tokens: 1024
+      })
+    });
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content;
+  } catch (e) {
+    console.error("Groq Error:", e);
+    return null;
+  }
+};
+
+// === 3. MOTEUR MISTRAL (Direct) ===
+const callMistral = async (systemPrompt: string, history: Message[]) => {
+  if (!KEYS.MISTRAL) return null;
+  try {
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map(m => ({ role: m.from === 'player' ? 'user' : 'assistant', content: m.content }))
+    ];
+    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${KEYS.MISTRAL}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: MODELS.FALLBACK, messages: messages })
+    });
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content;
+  } catch (e) { return null; }
+};
+
+// === ROUTEUR INTELLIGENT ===
+const askAI = async (prompt: string, history: Message[], type: 'FAST' | 'SMART') => {
+  let response = null;
+
+  // STRATÉGIE :
+  // Si on veut de la vitesse (Diplomatie) -> GROQ en premier
+  // Si on veut de l'analyse (Conseiller) -> GOOGLE en premier
+
+  if (type === 'FAST') {
+    response = await callGroq(prompt, history, 0.8);
+    if (!response) response = await callGoogle(prompt, history, 0.8); // Fallback
+  } else {
+    response = await callGoogle(prompt, history, 0.6);
+    if (!response) response = await callGroq(prompt, history, 0.6); // Fallback
+  }
+
+  // Si tout échoue, on tente Mistral
+  if (!response) response = await callMistral(prompt, history);
+
+  return response || "⚠️ Erreur : Tous les canaux sont brouillés (Vérifiez vos clés API).";
+};
 
 // === DONNÉES STATIQUES ===
 export const MOCK_COUNTRIES: Country[] = [
@@ -52,106 +151,67 @@ export const MOCK_COUNTRIES: Country[] = [
   }
 ];
 
-// === FONCTION APPEL OPENROUTER ===
-const callOpenRouter = async (systemPrompt: string, history: Message[], modelId: string, temperature: number = 0.7) => {
-  if (!OPENROUTER_API_KEY) {
-    console.error("ERREUR CRITIQUE: Clé VITE_OPENROUTER_API_KEY manquante");
-    return "⚠️ Erreur Système : Clé API introuvable.";
-  }
+// === EXPORTS API (Inchangés pour le reste de l'app) ===
 
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history.map(m => ({
-      role: m.from === 'player' ? 'user' : 'assistant',
-      content: m.content
-    }))
-  ];
-
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_NAME,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: modelId,
-        messages: messages,
-        temperature: temperature,
-        max_tokens: 1024,
-        top_p: 0.9
-      })
-    });
-
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
-    return data.choices?.[0]?.message?.content || "...";
-  } catch (e) {
-    console.error("Network Error", e);
-    return "Liaison satellite interrompue (Timeout).";
-  }
-};
-
-// === API DIPLOMATIE (Rotation Aléatoire) ===
 export const diplomacyApi = {
-  sendMessage: async (gameId: string, conversationId: string, messageContent: string, targetCountryId: string, history: Message[], playerContext: any, currentDate: string) => {
-
+  sendMessage: async (gameId: any, conversationId: any, messageContent: any, targetCountryId: any, history: any, playerContext: any, currentDate: any) => {
+    // On recrée le contexte système ici (abrégé pour l'exemple)
     const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
-    if (!targetCountry) return { data: { aiMessage: { from: 'system', content: "Erreur Cible", timestamp: Date.now() } } };
+    const prompt = `TU ES ${targetCountry?.leader_name || 'Chef'}. DATE: ${currentDate}. INTERLOCUTEUR: ${playerContext.leaderName}. Réponds court et réaliste.`;
 
-    const systemPrompt = `
-    SIMULATION GÉOPOLITIQUE TRÈS HAUTE FIDÉLITÉ.
-    DATE : ${currentDate}.
-    TU INCARNES : ${targetCountry.leader_name} (${targetCountry.name_fr || targetCountry.name}).
-    INTERLOCUTEUR : ${playerContext.leaderName} (${playerContext.countryName}).
-    TRAITS : ${JSON.stringify(targetCountry.leader_personality)}.
-
-    DIRECTIVES : Réponds en TEXTE BRUT. Sois stratégique. 3 phrases max sauf nécessité.
-    `;
-
-    // ROTATION : On pioche un modèle au hasard dans le pool à chaque message
-    const randomModel = DIPLOMACY_POOL[Math.floor(Math.random() * DIPLOMACY_POOL.length)];
-    console.log(`[DIPLOMACY] ${targetCountry.id} utilise le modèle : ${randomModel}`);
-
-    // Température légèrement élevée pour varier les réponses
-    const response = await callOpenRouter(systemPrompt, history, randomModel, 0.8);
-
-    return { data: { aiMessage: { from: targetCountryId, content: response.replace(/\*\*/g, '').trim(), timestamp: Date.now() } } };
+    // Appel Rapide (Groq)
+    const content = await askAI(prompt, history, 'FAST');
+    return { data: { aiMessage: { from: targetCountryId, content: content, timestamp: Date.now() } } };
   }
 };
 
-// === API CONSEILLER (Fixe sur le "Thinking") ===
 export const advisorApi = {
-    ask: async (query: string, history: Message[], targetName?: string | null) => {
-        const historyContext = history.map(m => `[${m.from === 'player' ? 'JOUEUR' : 'AUTRE'}] "${m.content}"`).join('\n');
+  ask: async (query: any, history: any, targetName: any) => {
+    const prompt = `RÔLE: Conseiller Stratégique. CONTEXTE: ${targetName || 'Global'}. QUESTION: "${query}". Sois machiavélique.`;
 
-        const prompt = `
-        RÔLE: Conseiller Stratégique Machiavélique.
-        CONTEXTE: ${targetName ? `Négociation avec ${targetName}` : 'Analyse globale'}.
-        HISTORIQUE: ${historyContext.slice(-2000)}
-        QUESTION: "${query}"
-        MISSION: Analyse lucide et conseil actionnable.
-        `;
-
-        // Utilisation exclusive du modèle "Thinking" (Deepseek V3.2)
-        console.log(`[ADVISOR] Analyse via ${ADVISOR_MODEL}`);
-        const response = await callOpenRouter(prompt, [{from: 'player', content: 'Analyse.', timestamp: 0} as Message], ADVISOR_MODEL, 0.6);
-
-        return response || "Je consulte les archives...";
-    }
+    // Appel Intelligent (Google)
+    const content = await askAI(prompt, [{ from: 'player', content: 'Analyse', timestamp: 0 }], 'SMART');
+    return content;
+  }
 };
 
-// === MOCK SERVICES ===
 export const gameApi = {
-  create: async (data: any) => {
-    const playerCountry = MOCK_COUNTRIES.find(c => c.id === data.player_country) || MOCK_COUNTRIES[0];
-    return { data: { id: 'local-' + Date.now(), name: data.name, player_country: playerCountry.id, player_leader: { name: playerCountry.leader_name, reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }, traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 } }, game_date: 0, speed_setting: 'normal', region: 'world', mode: 'sandbox' } };
+  create: async (d:any) => {
+     const playerCountry = MOCK_COUNTRIES.find(c => c.id === d.player_country) || MOCK_COUNTRIES[0];
+     return {
+       data: {
+         id: '1',
+         ...d,
+         player_leader: {
+           name: playerCountry.leader_name,
+           rise_to_power: 'incumbent' as const,
+           traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 },
+           reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }
+         },
+         game_date: 0,
+         speed_setting: 'normal' as const,
+         region: 'world' as const,
+         mode: 'sandbox' as const
+       }
+     };
   },
-  get: (id: string) => ({ data: { /* Mock data */ } }),
+  get: (id:any) => ({
+    data: {
+      id: '1',
+      name: 'Partie Test',
+      player_country: 'france',
+      player_leader: {
+        name: 'Emmanuel Macron',
+        rise_to_power: 'election' as const,
+        traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 },
+        reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }
+      },
+      game_date: 0,
+      speed_setting: 'normal' as const,
+      region: 'world' as const,
+      mode: 'sandbox' as const
+    }
+  })
 };
 
-export const countryApi = {
-  list: async () => ({ data: MOCK_COUNTRIES }),
-};
+export const countryApi = { list: async () => ({ data: MOCK_COUNTRIES }) };
