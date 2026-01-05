@@ -1,35 +1,37 @@
-import { Country, Message } from '../types';
-import { GoogleGenerativeAI as GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
+import { Country, Message, Game } from '../types';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
 // === CONFIGURATION DES CLÉS (Sécurité : Vérifie qu'elles existent) ===
+// Assurez-vous que .env.local contient : VITE_GOOGLE_API_KEY, VITE_GROQ_API_KEY, VITE_MISTRAL_API_KEY
 const KEYS = {
   GOOGLE: import.meta.env.VITE_GOOGLE_API_KEY,
   GROQ: import.meta.env.VITE_GROQ_API_KEY,
   MISTRAL: import.meta.env.VITE_MISTRAL_API_KEY
 };
 
-// === LE CASTING GRATUIT ===
+// === LE CASTING "TRIO GRATUIT" ===
 const MODELS = {
-  // CONSEILLER : Gemini 1.5 Flash (Google)
-  // Pourquoi ? 1 Million de tokens de contexte GRATUIT. Il se souvient de tout.
-  ADVISOR: 'gemini-1.5-flash',
+  // CONSEILLER : Gemini 2.0 Flash Experimental (Google)
+  // Le modèle "Next Gen" de Google. Plus intelligent que le 1.5 Pro, et GRATUIT en preview.
+  ADVISOR: 'gemini-2.0-flash-exp',
 
   // DIPLOMATE : Llama 3.3 70B (via Groq)
-  // Pourquoi ? C'est le plus rapide du monde (500 tokens/sec) et gratuit actuellement.
+  // Le champion de l'Open Source. Vitesse extrême (500 tokens/s) et excellent en RP.
   DIPLOMAT: 'llama-3.3-70b-versatile',
 
   // SECOURS : Mistral Nemo (Mistral)
-  // Pourquoi ? Très bon en français si les autres plantent.
+  // Le modèle français optimisé, parfait pour dépanner.
   FALLBACK: 'open-mistral-nemo'
 };
 
-// === 1. MOTEUR GOOGLE (Direct) ===
+// === 1. MOTEUR GOOGLE (Le Cerveau - Direct) ===
 const callGoogle = async (systemPrompt: string, history: Message[], temperature: number) => {
-  if (!KEYS.GOOGLE) return null;
-  const ai = new GoogleGenAI(KEYS.GOOGLE);
+  if (!KEYS.GOOGLE) { console.warn("Pas de clé Google"); return null; }
+
+  const ai = new GoogleGenerativeAI(KEYS.GOOGLE);
   try {
     const model = ai.getGenerativeModel({
-      model: MODELS.ADVISOR,
+      model: MODELS.ADVISOR, // Utilise gemini-2.0-flash-exp
       systemInstruction: systemPrompt,
       safetySettings: [{ category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }]
     });
@@ -50,9 +52,10 @@ const callGoogle = async (systemPrompt: string, history: Message[], temperature:
   }
 };
 
-// === 2. MOTEUR GROQ (Direct - Compatible OpenAI) ===
+// === 2. MOTEUR GROQ (Le Speedster - Direct) ===
 const callGroq = async (systemPrompt: string, history: Message[], temperature: number) => {
-  if (!KEYS.GROQ) return null;
+  if (!KEYS.GROQ) { console.warn("Pas de clé Groq"); return null; }
+
   try {
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -77,7 +80,7 @@ const callGroq = async (systemPrompt: string, history: Message[], temperature: n
   }
 };
 
-// === 3. MOTEUR MISTRAL (Direct) ===
+// === 3. MOTEUR MISTRAL (Le Roue de Secours - Direct) ===
 const callMistral = async (systemPrompt: string, history: Message[]) => {
   if (!KEYS.MISTRAL) return null;
   try {
@@ -100,24 +103,26 @@ const askAI = async (prompt: string, history: Message[], type: 'FAST' | 'SMART')
   let response = null;
 
   // STRATÉGIE :
-  // Si on veut de la vitesse (Diplomatie) -> GROQ en premier
-  // Si on veut de l'analyse (Conseiller) -> GOOGLE en premier
+  // DIPLOMATIE (Tchat) -> On veut que ça aille vite -> GROQ (Llama 3.3)
+  // CONSEILLER (Stratégie) -> On veut que ce soit intelligent -> GOOGLE (Gemini 2.0)
 
   if (type === 'FAST') {
     response = await callGroq(prompt, history, 0.8);
-    if (!response) response = await callGoogle(prompt, history, 0.8); // Fallback
+    if (!response) response = await callGoogle(prompt, history, 0.8); // Fallback Google
   } else {
     response = await callGoogle(prompt, history, 0.6);
-    if (!response) response = await callGroq(prompt, history, 0.6); // Fallback
+    if (!response) response = await callGroq(prompt, history, 0.6); // Fallback Groq
   }
 
   // Si tout échoue, on tente Mistral
   if (!response) response = await callMistral(prompt, history);
 
-  return response || "⚠️ Erreur : Tous les canaux sont brouillés (Vérifiez vos clés API).";
+  return response || "⚠️ Erreur : Tous les canaux sont brouillés (Vérifiez vos clés API dans .env.local).";
 };
 
-// === DONNÉES STATIQUES ===
+// === EXPORTS API ===
+
+// Données Mock des pays (Indispensable pour que le jeu tourne sans BDD)
 export const MOCK_COUNTRIES: Country[] = [
   {
     id: 'germany', name: 'Germany', name_fr: 'Allemagne', flag: '🇩🇪', region: 'europe', tier: 1, lat: 51.1657, lng: 10.4515, leader_name: 'Olaf Scholz',
@@ -151,67 +156,97 @@ export const MOCK_COUNTRIES: Country[] = [
   }
 ];
 
-// === EXPORTS API (Inchangés pour le reste de l'app) ===
-
 export const diplomacyApi = {
-  sendMessage: async (gameId: any, conversationId: any, messageContent: any, targetCountryId: any, history: any, playerContext: any, currentDate: any) => {
-    // On recrée le contexte système ici (abrégé pour l'exemple)
-    const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
-    const prompt = `TU ES ${targetCountry?.leader_name || 'Chef'}. DATE: ${currentDate}. INTERLOCUTEUR: ${playerContext.leaderName}. Réponds court et réaliste.`;
+  sendMessage: async (gameId: string, conversationId: string, messageContent: string, targetCountryId: string, history: Message[], playerContext: any, currentDate: string) => {
 
-    // Appel Rapide (Groq)
-    const content = await askAI(prompt, history, 'FAST');
-    return { data: { aiMessage: { from: targetCountryId, content: content, timestamp: Date.now() } } };
+    const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
+    if (!targetCountry) return { data: { aiMessage: { from: 'system', content: "Erreur Cible", timestamp: Date.now() } } };
+
+    const systemPrompt = `
+    DÉBUT DE SESSION : Simulation Diplomatique.
+    DATE : ${currentDate}.
+    TU ES : ${targetCountry.leader_name} de ${targetCountry.name_fr}.
+    TON INTERLOCUTEUR : ${playerContext.leaderName} (${playerContext.countryName}).
+
+    PERSONNALITÉ : ${JSON.stringify(targetCountry.leader_personality)}.
+    CONTEXTE ÉCO : PIB ${targetCountry.economy.gdp}B, Armée ${targetCountry.military.strength}k hommes.
+
+    RÈGLES : Réponds en TEXTE BRUT. Sois stratégique, méfiant ou allié selon l'historique. Max 3 phrases sauf si négociation complexe.
+    `;
+
+    // Utilisation du profil FAST (Groq - Llama 3.3) pour la diplomatie
+    const content = await askAI(systemPrompt, history, 'FAST');
+
+    const cleanText = (content || "...")
+      .replace(/\*\*/g, '')
+      .replace(/^#+ /gm, '')
+      .trim();
+
+    return { data: { aiMessage: { from: targetCountryId, content: cleanText, timestamp: Date.now() } } };
   }
 };
 
 export const advisorApi = {
-  ask: async (query: any, history: any, targetName: any) => {
-    const prompt = `RÔLE: Conseiller Stratégique. CONTEXTE: ${targetName || 'Global'}. QUESTION: "${query}". Sois machiavélique.`;
+    ask: async (query: string, history: Message[], targetName?: string | null) => {
+        const historyContext = history.map(m => `[${m.from === 'player' ? 'JOUEUR' : 'AUTRE'}] "${m.content}"`).join('\n');
+        const prompt = `
+        RÔLE: Conseiller Stratégique Machiavélique.
+        CONTEXTE ACTUEL:
+        ${targetName ? `Négociation avec ${targetName}` : 'Analyse générale'}
 
-    // Appel Intelligent (Google)
-    const content = await askAI(prompt, [{ from: 'player', content: 'Analyse', timestamp: 0 }], 'SMART');
-    return content;
-  }
+        HISTORIQUE RÉCENT:
+        ${historyContext.slice(-3000)}
+
+        QUESTION DU JOUEUR: "${query}"
+
+        Réponds de manière concise, cynique et utile. Propose une action concrète.
+        `;
+
+        // Utilisation du profil SMART (Google Gemini 2.0 Flash Exp) pour le conseiller
+        const response = await askAI("Tu es un conseiller stratégique.", [{from: 'player', content: prompt, timestamp: 0} as Message], 'SMART');
+        return response;
+    }
 };
 
 export const gameApi = {
-  create: async (d:any) => {
-     const playerCountry = MOCK_COUNTRIES.find(c => c.id === d.player_country) || MOCK_COUNTRIES[0];
-     return {
-       data: {
-         id: '1',
-         ...d,
-         player_leader: {
-           name: playerCountry.leader_name,
-           rise_to_power: 'incumbent' as const,
-           traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 },
-           reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }
-         },
-         game_date: 0,
-         speed_setting: 'normal' as const,
-         region: 'world' as const,
-         mode: 'sandbox' as const
-       }
-     };
+  create: async (data: any) => {
+    const playerCountry = MOCK_COUNTRIES.find(c => c.id === data.player_country) || MOCK_COUNTRIES[0];
+    const gameData: any = {
+        id: 'local-' + Date.now(),
+        name: data.name,
+        player_country: playerCountry.id,
+        player_leader: {
+            name: playerCountry.leader_name,
+            rise_to_power: 'incumbent',
+            reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 },
+            traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 }
+        },
+        game_date: 0,
+        speed_setting: 'normal',
+        region: 'world',
+        mode: 'sandbox'
+    };
+    return { data: gameData };
   },
-  get: (id:any) => ({
-    data: {
-      id: '1',
-      name: 'Partie Test',
-      player_country: 'france',
-      player_leader: {
-        name: 'Emmanuel Macron',
-        rise_to_power: 'election' as const,
-        traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 },
-        reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }
-      },
-      game_date: 0,
-      speed_setting: 'normal' as const,
-      region: 'world' as const,
-      mode: 'sandbox' as const
-    }
-  })
+  get: (id: string) => ({
+      data: {
+        id: '1',
+        name: 'Partie Test',
+        player_country: 'france',
+        player_leader: {
+            name: 'Emmanuel Macron',
+            rise_to_power: 'election' as const,
+            traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 },
+            reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }
+        },
+        game_date: 0,
+        speed_setting: 'normal' as const,
+        region: 'world' as const,
+        mode: 'sandbox' as const
+      }
+  }),
 };
 
-export const countryApi = { list: async () => ({ data: MOCK_COUNTRIES }) };
+export const countryApi = {
+  list: async () => ({ data: MOCK_COUNTRIES }),
+};
