@@ -1,3 +1,4 @@
+
 import axios from 'axios';
 import { Country, Game, GameMode, Region, Message } from '../types';
 import { GoogleGenAI, Content, HarmCategory, HarmBlockThreshold } from "@google/genai";
@@ -5,8 +6,8 @@ import { GoogleGenAI, Content, HarmCategory, HarmBlockThreshold } from "@google/
 const API_BASE = 'http://localhost:8000/api';
 export const api = axios.create({ baseURL: API_BASE, headers: { 'Content-Type': 'application/json' } });
 
-// Fallback pour éviter le crash "API Key must be set" si la variable env est absente lors du rendu initial
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || 'system-missing-key' });
+// Suppression de l'initialisation globale qui faisait planter l'app au démarrage
+// const ai = new GoogleGenAI({ apiKey: ... }); 
 
 const GLOBAL_MARKET = { electricity: 60, oil: 80, food: 250, steel: 700 };
 
@@ -127,6 +128,9 @@ export const countryApi = {
 
 export const diplomacyApi = {
   sendMessage: async (gameId: string, conversationId: string, messageContent: string, targetCountryId: string, history: Message[], playerContext: any, currentDate: string) => {
+    // Initialisation LAZY pour éviter le crash au chargement si pas de clé
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
     const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
     if (!targetCountry) return { data: { aiMessage: { from: 'system', content: "Erreur", timestamp: Date.now() } } };
 
@@ -135,7 +139,6 @@ export const diplomacyApi = {
         parts: [{ text: msg.content }]
     }));
 
-    // PROMPT SYSTEME RENFORCÉ : Interdiction stricte des salutations répétitives.
     const systemPrompt = `
     DÉBUT DE SESSION : Simulation Diplomatique Temps Réel.
 
@@ -152,14 +155,14 @@ export const diplomacyApi = {
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview', 
+            model: 'gemini-2.5-flash-latest', // CORRECTION : Passage au modèle 2.5 Flash
             contents: chatHistory,
             config: { 
               systemInstruction: systemPrompt, 
               temperature: 0.7,
               maxOutputTokens: 1000,
-              thinkingConfig: { thinkingBudget: 500 },
-              // DESACTIVATION CRITIQUE DES FILTRES DE SECURITE POUR AUTORISER LES SCENARIOS DE GUERRE
+              // Le thinking budget est réservé aux modèles 3.0, je le retire pour éviter des soucis de compatibilité avec 2.5 Flash standard
+              // thinkingConfig: { thinkingBudget: 500 },
               safetySettings: [
                 { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
                 { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -187,16 +190,19 @@ export const diplomacyApi = {
 
 export const advisorApi = {
     ask: async (query: string, history: Message[], targetName?: string | null) => {
+        // Initialisation LAZY
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
         const historyText = history.map(m => `[${m.from === 'player' ? 'JOUEUR' : 'MOI'}] : "${m.content}"`).join('\n');
         const context = targetName ? `Cible: ${targetName}\nHistorique:\n${historyText}\n\n` : '';
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-2.5-flash-latest', // CORRECTION : Passage au modèle 2.5 Flash
             contents: context + query,
             config: { 
               systemInstruction: "CONSEILLER DIPLOMATIQUE CYNIQUE. Analyse les deals complexes. Oublie toute session passée. Style bref, pas de markdown gras. Max 2 phrases.", 
               maxOutputTokens: 300,
-              thinkingConfig: { thinkingBudget: 100 },
+              // thinkingConfig retiré pour compatibilité 2.5 Flash
               safetySettings: [
                 { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
               ]
