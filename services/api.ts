@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 import { Country, Game, GameMode, Region, Message } from '../types';
 import { GoogleGenAI, Content, HarmCategory, HarmBlockThreshold } from "@google/genai";
@@ -6,7 +5,8 @@ import { GoogleGenAI, Content, HarmCategory, HarmBlockThreshold } from "@google/
 const API_BASE = 'http://localhost:8000/api';
 export const api = axios.create({ baseURL: API_BASE, headers: { 'Content-Type': 'application/json' } });
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Fallback pour éviter le crash "API Key must be set" si la variable env est absente lors du rendu initial
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || 'system-missing-key' });
 
 const GLOBAL_MARKET = { electricity: 60, oil: 80, food: 250, steel: 700 };
 
