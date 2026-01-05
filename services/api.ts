@@ -1,36 +1,24 @@
-import { Country, Game, Message, Region } from '../types';
-// Note: On n'utilise plus @google/genai, tout passe par OpenRouter via fetch standard.
+import { Country, Game, Message } from '../types';
 
-// === CONFIGURATION INFRASTRUCTURE ===
-const API_BASE = 'http://localhost:8000/api';
+// === CONFIGURATION ===
 const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || '';
 const SITE_URL = 'http://localhost:3000';
 const SITE_NAME = 'Pax Modern';
 
-// === CASTING DES INTELLIGENCES ARTIFICIELLES ===
-const AI_CASTING = {
-  // 1. LE STRATÈGE (Conseiller & USA)
-  // Deepseek v3.2 : Roi du raisonnement, idéal pour la logique implacable.
-  STRATEGIST: 'deepseek/deepseek-v3.2',
+// === 1. LE CERVEAU (Fixe pour le Conseiller) ===
+// Modèle de haute intelligence pour l'analyse stratégique
+const ADVISOR_MODEL = 'deepseek/deepseek-v3.2';
 
-  // 2. LE DIPLOMATE RAPIDE (Europe / Défaut)
-  // Gemini 2.5 Flash : Rapide, efficace, bon quota gratuit.
-  DIPLOMAT_FAST: 'google/gemini-2.5-flash',
+// === 2. LE POOL DIPLOMATIQUE (Rotation Aléatoire) ===
+// Ces modèles tourneront aléatoirement pour les dialogues des pays
+const DIPLOMACY_POOL = [
+  'google/gemini-2.5-flash',          // Rapide & Efficace
+  'xiaomi/mimo-v2-flash-20251210',    // Optimisé Mobile/Web
+  'deepseek/deepseek-chat-v3-0324',   // V3 Legacy stable
+  'tngtech/deepseek-r1t2-chimera'     // Créatif & Non-censuré
+];
 
-  // 3. L'IMPRÉVISIBLE (Russie / Iran / Dictatures)
-  // Chimera : Modèle "fusion" créatif, moins censuré, parfait pour les menaces.
-  CREATIVE: 'tngtech/deepseek-r1t2-chimera',
-
-  // 4. L'ASIATIQUE TECH (Chine / Japon)
-  // Xiaomi Mimo : Modèle optimisé chinois, pour une "saveur" locale réaliste.
-  ASIAN_TECH: 'xiaomi/mimo-v2-flash-20251210',
-
-  // 5. LE LEGACY (Fallback)
-  // Une version stable de Deepseek en cas de pépin.
-  LEGACY: 'deepseek/deepseek-chat-v3-0324'
-};
-
-// === DONNÉES STATIQUES (Gardées de l'ancienne version) ===
+// === DONNÉES STATIQUES ===
 export const MOCK_COUNTRIES: Country[] = [
   {
     id: 'germany', name: 'Germany', name_fr: 'Allemagne', flag: '🇩🇪', region: 'europe', tier: 1, lat: 51.1657, lng: 10.4515, leader_name: 'Olaf Scholz',
@@ -119,14 +107,13 @@ export const MOCK_COUNTRIES: Country[] = [
   }
 ];
 
-// === FONCTION UTILITAIRE : APPEL OPENROUTER ===
+// === FONCTION APPEL OPENROUTER ===
 const callOpenRouter = async (systemPrompt: string, history: Message[], modelId: string, temperature: number = 0.7) => {
   if (!OPENROUTER_API_KEY) {
-    console.error("ERREUR CRITIQUE: Clé VITE_OPENROUTER_API_KEY manquante dans .env.local");
+    console.error("ERREUR CRITIQUE: Clé VITE_OPENROUTER_API_KEY manquante");
     return "⚠️ Erreur Système : Clé API introuvable.";
   }
 
-  // Formatage OpenAI standard
   const messages = [
     { role: 'system', content: systemPrompt },
     ...history.map(m => ({
@@ -154,12 +141,7 @@ const callOpenRouter = async (systemPrompt: string, history: Message[], modelId:
     });
 
     const data = await response.json();
-
-    if (data.error) {
-        console.error("OpenRouter Error:", data.error);
-        return `[ERREUR COM] ${data.error.message}`;
-    }
-
+    if (data.error) throw new Error(data.error.message);
     return data.choices?.[0]?.message?.content || "...";
   } catch (e) {
     console.error("Network Error", e);
@@ -167,99 +149,62 @@ const callOpenRouter = async (systemPrompt: string, history: Message[], modelId:
   }
 };
 
-// === API DIPLOMATIE (Le cœur du jeu) ===
+// === API DIPLOMATIE (Rotation Aléatoire) ===
 export const diplomacyApi = {
   sendMessage: async (gameId: string, conversationId: string, messageContent: string, targetCountryId: string, history: Message[], playerContext: any, currentDate: string) => {
 
     const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
     if (!targetCountry) return { data: { aiMessage: { from: 'system', content: "Erreur Cible", timestamp: Date.now() } } };
 
-    // Prompt Système (Contextualisation)
     const systemPrompt = `
     SIMULATION GÉOPOLITIQUE TRÈS HAUTE FIDÉLITÉ.
     DATE : ${currentDate}.
+    TU INCARNES : ${targetCountry.leader_name} (${targetCountry.name_fr || targetCountry.name}).
+    INTERLOCUTEUR : ${playerContext.leaderName} (${playerContext.countryName}).
+    TRAITS : ${JSON.stringify(targetCountry.leader_personality)}.
 
-    TU INCARNES : ${targetCountry.leader_name}, dirigeant de : ${targetCountry.name_fr || targetCountry.name}.
-    TON INTERLOCUTEUR : ${playerContext.leaderName} (${playerContext.countryName}).
-
-    TA PERSONNALITÉ : ${JSON.stringify(targetCountry.leader_personality)}.
-    TON ÉTAT : PIB ${targetCountry.economy.gdp}B, Stabilité ${(targetCountry.stability * 100).toFixed(0)}%.
-
-    DIRECTIVES :
-    1. Réponds en TEXTE BRUT (Pas de markdown, pas de gras).
-    2. Sois bref (max 3 phrases) sauf si la négociation l'exige.
-    3. Défends tes intérêts nationaux avec cynisme si nécessaire.
-    4. Tu as le droit de bluffer ou de menacer.
+    DIRECTIVES : Réponds en TEXTE BRUT. Sois stratégique. 3 phrases max sauf nécessité.
     `;
 
-    // SÉLECTION DYNAMIQUE DU MODÈLE (Casting)
-    let selectedModel = AI_CASTING.DIPLOMAT_FAST; // Par défaut : Gemini 2.5
-    let temp = 0.75;
+    // ROTATION : On pioche un modèle au hasard dans le pool à chaque message
+    const randomModel = DIPLOMACY_POOL[Math.floor(Math.random() * DIPLOMACY_POOL.length)];
+    console.log(`[DIPLOMACY] ${targetCountry.id} utilise le modèle : ${randomModel}`);
 
-    switch (targetCountryId) {
-        case 'china':
-            selectedModel = AI_CASTING.ASIAN_TECH; // Xiaomi Mimo
-            temp = 0.6; // Plus froid/calculateur
-            break;
-        case 'russia':
-        case 'iran':
-        case 'north_korea':
-            selectedModel = AI_CASTING.CREATIVE; // Chimera
-            temp = 0.85; // Plus imprévisible/agressif
-            break;
-        case 'usa':
-            selectedModel = AI_CASTING.STRATEGIST; // Deepseek 3.2
-            temp = 0.7; // Très logique
-            break;
-        default:
-            selectedModel = AI_CASTING.DIPLOMAT_FAST; // Europe & Reste du monde
-            break;
-    }
+    // Température légèrement élevée pour varier les réponses
+    const response = await callOpenRouter(systemPrompt, history, randomModel, 0.8);
 
-    console.log(`[DIPLOMACY] Envoi message à ${targetCountryId} via ${selectedModel}`);
-    const aiResponse = await callOpenRouter(systemPrompt, history, selectedModel, temp);
-
-    // Nettoyage léger
-    const cleanText = aiResponse.replace(/\*\*/g, '').trim();
-
-    return { data: { aiMessage: { from: targetCountryId, content: cleanText, timestamp: Date.now() } } };
+    return { data: { aiMessage: { from: targetCountryId, content: response.replace(/\*\*/g, '').trim(), timestamp: Date.now() } } };
   }
 };
 
-// === API CONSEILLER (Le Cerveau) ===
+// === API CONSEILLER (Fixe sur le "Thinking") ===
 export const advisorApi = {
     ask: async (query: string, history: Message[], targetName?: string | null) => {
         const historyContext = history.map(m => `[${m.from === 'player' ? 'JOUEUR' : 'AUTRE'}] "${m.content}"`).join('\n');
 
         const prompt = `
-        RÔLE: Conseiller Stratégique Machiavélique de Haut Niveau.
-        CONTEXTE ACTUEL: ${targetName ? `Négociation en cours avec ${targetName}` : 'Analyse de la situation globale'}.
-
-        HISTORIQUE RÉCENT DES ÉCHANGES:
-        ${historyContext.slice(-3000)}
-
-        DEMANDE DU JOUEUR: "${query}"
-
-        TA MISSION :
-        Donne une analyse lucide, cynique et utile. Propose une action concrète.
-        Sois bref.
+        RÔLE: Conseiller Stratégique Machiavélique.
+        CONTEXTE: ${targetName ? `Négociation avec ${targetName}` : 'Analyse globale'}.
+        HISTORIQUE: ${historyContext.slice(-2000)}
+        QUESTION: "${query}"
+        MISSION: Analyse lucide et conseil actionnable.
         `;
 
-        // Pour le conseiller, on veut le MEILLEUR modèle de raisonnement disponible
-        console.log(`[ADVISOR] Réflexion via ${AI_CASTING.STRATEGIST}`);
-        const response = await callOpenRouter(prompt, [{from: 'player', content: 'Analyse.', timestamp: 0} as Message], AI_CASTING.STRATEGIST, 0.6);
+        // Utilisation exclusive du modèle "Thinking" (Deepseek V3.2)
+        console.log(`[ADVISOR] Analyse via ${ADVISOR_MODEL}`);
+        const response = await callOpenRouter(prompt, [{from: 'player', content: 'Analyse.', timestamp: 0} as Message], ADVISOR_MODEL, 0.6);
 
-        return response || "Je suis en train d'analyser les rapports... (Silence radio)";
+        return response || "Je consulte les archives...";
     }
 };
 
-// === AUTRES SERVICES (Mock) ===
+// === MOCK SERVICES ===
 export const gameApi = {
   create: async (data: any) => {
     const playerCountry = MOCK_COUNTRIES.find(c => c.id === data.player_country) || MOCK_COUNTRIES[0];
     return { data: { id: 'local-' + Date.now(), name: data.name, player_country: playerCountry.id, player_leader: { name: playerCountry.leader_name, reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }, traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 } }, game_date: 0, speed_setting: 'normal', region: 'world', mode: 'sandbox' } };
   },
-  get: (id: string) => ({ data: { /* Mock data si nécessaire */ } }), // Simplifié pour éviter erreurs build
+  get: (id: string) => ({ data: { /* Mock data */ } }),
 };
 
 export const countryApi = {
