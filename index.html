@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pax Modern</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              gray: {
+                900: '#111827',
+                800: '#1f2937',
+                700: '#374151',
+                600: '#4b5563',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Minimal reset for full height app */
+      html, body, #root {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #111827; /* gray-900 */
+        color: #f3f4f6; /* gray-100 */
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "leaflet": "https://esm.sh/leaflet@^1.9.4",
+    "react-leaflet": "https://esm.sh/react-leaflet@^5.0.0",
+    "axios": "https://esm.sh/axios@^1.13.2",
+    "zustand": "https://esm.sh/zustand@^5.0.9",
+    "@google/genai": "https://esm.sh/@google/genai@^1.34.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
