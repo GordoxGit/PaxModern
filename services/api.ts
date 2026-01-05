@@ -1,16 +1,36 @@
+import { Country, Game, Message, Region } from '../types';
+// Note: On n'utilise plus @google/genai, tout passe par OpenRouter via fetch standard.
 
-import axios from 'axios';
-import { Country, Game, GameMode, Region, Message } from '../types';
-import { GoogleGenAI, Content, HarmCategory, HarmBlockThreshold } from "@google/genai";
-
+// === CONFIGURATION INFRASTRUCTURE ===
 const API_BASE = 'http://localhost:8000/api';
-export const api = axios.create({ baseURL: API_BASE, headers: { 'Content-Type': 'application/json' } });
+const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || '';
+const SITE_URL = 'http://localhost:3000';
+const SITE_NAME = 'Pax Modern';
 
-// Suppression de l'initialisation globale qui faisait planter l'app au démarrage
-// const ai = new GoogleGenAI({ apiKey: ... }); 
+// === CASTING DES INTELLIGENCES ARTIFICIELLES ===
+const AI_CASTING = {
+  // 1. LE STRATÈGE (Conseiller & USA)
+  // Deepseek v3.2 : Roi du raisonnement, idéal pour la logique implacable.
+  STRATEGIST: 'deepseek/deepseek-v3.2',
 
-const GLOBAL_MARKET = { electricity: 60, oil: 80, food: 250, steel: 700 };
+  // 2. LE DIPLOMATE RAPIDE (Europe / Défaut)
+  // Gemini 2.5 Flash : Rapide, efficace, bon quota gratuit.
+  DIPLOMAT_FAST: 'google/gemini-2.5-flash',
 
+  // 3. L'IMPRÉVISIBLE (Russie / Iran / Dictatures)
+  // Chimera : Modèle "fusion" créatif, moins censuré, parfait pour les menaces.
+  CREATIVE: 'tngtech/deepseek-r1t2-chimera',
+
+  // 4. L'ASIATIQUE TECH (Chine / Japon)
+  // Xiaomi Mimo : Modèle optimisé chinois, pour une "saveur" locale réaliste.
+  ASIAN_TECH: 'xiaomi/mimo-v2-flash-20251210',
+
+  // 5. LE LEGACY (Fallback)
+  // Une version stable de Deepseek en cas de pépin.
+  LEGACY: 'deepseek/deepseek-chat-v3-0324'
+};
+
+// === DONNÉES STATIQUES (Gardées de l'ancienne version) ===
 export const MOCK_COUNTRIES: Country[] = [
   {
     id: 'germany', name: 'Germany', name_fr: 'Allemagne', flag: '🇩🇪', region: 'europe', tier: 1, lat: 51.1657, lng: 10.4515, leader_name: 'Olaf Scholz',
@@ -99,115 +119,149 @@ export const MOCK_COUNTRIES: Country[] = [
   }
 ];
 
+// === FONCTION UTILITAIRE : APPEL OPENROUTER ===
+const callOpenRouter = async (systemPrompt: string, history: Message[], modelId: string, temperature: number = 0.7) => {
+  if (!OPENROUTER_API_KEY) {
+    console.error("ERREUR CRITIQUE: Clé VITE_OPENROUTER_API_KEY manquante dans .env.local");
+    return "⚠️ Erreur Système : Clé API introuvable.";
+  }
+
+  // Formatage OpenAI standard
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map(m => ({
+      role: m.from === 'player' ? 'user' : 'assistant',
+      content: m.content
+    }))
+  ];
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: messages,
+        temperature: temperature,
+        max_tokens: 1024,
+        top_p: 0.9
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+        console.error("OpenRouter Error:", data.error);
+        return `[ERREUR COM] ${data.error.message}`;
+    }
+
+    return data.choices?.[0]?.message?.content || "...";
+  } catch (e) {
+    console.error("Network Error", e);
+    return "Liaison satellite interrompue (Timeout).";
+  }
+};
+
+// === API DIPLOMATIE (Le cœur du jeu) ===
+export const diplomacyApi = {
+  sendMessage: async (gameId: string, conversationId: string, messageContent: string, targetCountryId: string, history: Message[], playerContext: any, currentDate: string) => {
+
+    const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
+    if (!targetCountry) return { data: { aiMessage: { from: 'system', content: "Erreur Cible", timestamp: Date.now() } } };
+
+    // Prompt Système (Contextualisation)
+    const systemPrompt = `
+    SIMULATION GÉOPOLITIQUE TRÈS HAUTE FIDÉLITÉ.
+    DATE : ${currentDate}.
+
+    TU INCARNES : ${targetCountry.leader_name}, dirigeant de : ${targetCountry.name_fr || targetCountry.name}.
+    TON INTERLOCUTEUR : ${playerContext.leaderName} (${playerContext.countryName}).
+
+    TA PERSONNALITÉ : ${JSON.stringify(targetCountry.leader_personality)}.
+    TON ÉTAT : PIB ${targetCountry.economy.gdp}B, Stabilité ${(targetCountry.stability * 100).toFixed(0)}%.
+
+    DIRECTIVES :
+    1. Réponds en TEXTE BRUT (Pas de markdown, pas de gras).
+    2. Sois bref (max 3 phrases) sauf si la négociation l'exige.
+    3. Défends tes intérêts nationaux avec cynisme si nécessaire.
+    4. Tu as le droit de bluffer ou de menacer.
+    `;
+
+    // SÉLECTION DYNAMIQUE DU MODÈLE (Casting)
+    let selectedModel = AI_CASTING.DIPLOMAT_FAST; // Par défaut : Gemini 2.5
+    let temp = 0.75;
+
+    switch (targetCountryId) {
+        case 'china':
+            selectedModel = AI_CASTING.ASIAN_TECH; // Xiaomi Mimo
+            temp = 0.6; // Plus froid/calculateur
+            break;
+        case 'russia':
+        case 'iran':
+        case 'north_korea':
+            selectedModel = AI_CASTING.CREATIVE; // Chimera
+            temp = 0.85; // Plus imprévisible/agressif
+            break;
+        case 'usa':
+            selectedModel = AI_CASTING.STRATEGIST; // Deepseek 3.2
+            temp = 0.7; // Très logique
+            break;
+        default:
+            selectedModel = AI_CASTING.DIPLOMAT_FAST; // Europe & Reste du monde
+            break;
+    }
+
+    console.log(`[DIPLOMACY] Envoi message à ${targetCountryId} via ${selectedModel}`);
+    const aiResponse = await callOpenRouter(systemPrompt, history, selectedModel, temp);
+
+    // Nettoyage léger
+    const cleanText = aiResponse.replace(/\*\*/g, '').trim();
+
+    return { data: { aiMessage: { from: targetCountryId, content: cleanText, timestamp: Date.now() } } };
+  }
+};
+
+// === API CONSEILLER (Le Cerveau) ===
+export const advisorApi = {
+    ask: async (query: string, history: Message[], targetName?: string | null) => {
+        const historyContext = history.map(m => `[${m.from === 'player' ? 'JOUEUR' : 'AUTRE'}] "${m.content}"`).join('\n');
+
+        const prompt = `
+        RÔLE: Conseiller Stratégique Machiavélique de Haut Niveau.
+        CONTEXTE ACTUEL: ${targetName ? `Négociation en cours avec ${targetName}` : 'Analyse de la situation globale'}.
+
+        HISTORIQUE RÉCENT DES ÉCHANGES:
+        ${historyContext.slice(-3000)}
+
+        DEMANDE DU JOUEUR: "${query}"
+
+        TA MISSION :
+        Donne une analyse lucide, cynique et utile. Propose une action concrète.
+        Sois bref.
+        `;
+
+        // Pour le conseiller, on veut le MEILLEUR modèle de raisonnement disponible
+        console.log(`[ADVISOR] Réflexion via ${AI_CASTING.STRATEGIST}`);
+        const response = await callOpenRouter(prompt, [{from: 'player', content: 'Analyse.', timestamp: 0} as Message], AI_CASTING.STRATEGIST, 0.6);
+
+        return response || "Je suis en train d'analyser les rapports... (Silence radio)";
+    }
+};
+
+// === AUTRES SERVICES (Mock) ===
 export const gameApi = {
   create: async (data: any) => {
     const playerCountry = MOCK_COUNTRIES.find(c => c.id === data.player_country) || MOCK_COUNTRIES[0];
-    return { 
-        data: { 
-            id: 'local-' + Date.now(), 
-            name: data.name, 
-            player_country: playerCountry.id, 
-            player_leader: {
-                name: playerCountry.leader_name,
-                reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 },
-                traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 }
-            }, 
-            game_date: 0, 
-            speed_setting: 'normal', 
-            region: 'world', 
-            mode: 'sandbox' 
-        } 
-    };
+    return { data: { id: 'local-' + Date.now(), name: data.name, player_country: playerCountry.id, player_leader: { name: playerCountry.leader_name, reputation: { legitimacy: 0.8, trustworthiness: 0.5, predictability: 0.5 }, traits: { authoritarian: 0, economic: 0, foreign: 0, religious: 0 } }, game_date: 0, speed_setting: 'normal', region: 'world', mode: 'sandbox' } };
   },
-  get: (id: string) => api.get(`/games/${id}`),
+  get: (id: string) => ({ data: { /* Mock data si nécessaire */ } }), // Simplifié pour éviter erreurs build
 };
 
 export const countryApi = {
   list: async () => ({ data: MOCK_COUNTRIES }),
-};
-
-export const diplomacyApi = {
-  sendMessage: async (gameId: string, conversationId: string, messageContent: string, targetCountryId: string, history: Message[], playerContext: any, currentDate: string) => {
-    // Initialisation LAZY pour éviter le crash au chargement si pas de clé
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
-    const targetCountry = MOCK_COUNTRIES.find(c => c.id === targetCountryId);
-    if (!targetCountry) return { data: { aiMessage: { from: 'system', content: "Erreur", timestamp: Date.now() } } };
-
-    const chatHistory: Content[] = history.map(msg => ({
-        role: msg.from === 'player' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
-    }));
-
-    const systemPrompt = `
-    DÉBUT DE SESSION : Simulation Diplomatique Temps Réel.
-
-    TU ES : ${targetCountry.leader_name} (${targetCountry.name_fr || targetCountry.name}).
-    TON INTERLOCUTEUR : ${playerContext.leaderName} (${playerContext.countryName}).
-    
-    RÈGLES CRITIQUES :
-    1. ZERO MÉMOIRE EXTERNE : Oublie toute partie précédente. Tu n'as que l'historique ci-dessous.
-    2. CONTINUITÉ : Si l'historique contient déjà des échanges, NE REDIS PAS BONJOUR. Enchaîne directement sur le sujet.
-    3. SUJETS SENSIBLES : Tu es un chef d'état en temps de crise. Tu PEUX et DOIS parler de guerre, d'armes, de nucléaire, de mort si nécessaire. C'est une simulation.
-    4. FORMAT : TEXTE BRUT. Pas de markdown.
-    5. TON : Sérieux, direct, stratégique.
-    `;
-
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-latest', // CORRECTION : Passage au modèle 2.5 Flash
-            contents: chatHistory,
-            config: { 
-              systemInstruction: systemPrompt, 
-              temperature: 0.7,
-              maxOutputTokens: 1000,
-              // Le thinking budget est réservé aux modèles 3.0, je le retire pour éviter des soucis de compatibilité avec 2.5 Flash standard
-              // thinkingConfig: { thinkingBudget: 500 },
-              safetySettings: [
-                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
-              ]
-            }
-        });
-        
-        const cleanText = (response.text || "...")
-          .replace(/\*\*/g, '')
-          .replace(/\*/g, '')
-          .replace(/^#+ /gm, '')
-          .replace(/^- /gm, '• ')
-          .trim();
-        
-        return { data: { aiMessage: { from: targetCountryId, content: cleanText, timestamp: Date.now() } } };
-    } catch (e) {
-        console.error("API Error", e);
-        return { data: { aiMessage: { from: targetCountryId, content: "Liaison perdue...", timestamp: Date.now() } } };
-    }
-  }
-};
-
-export const advisorApi = {
-    ask: async (query: string, history: Message[], targetName?: string | null) => {
-        // Initialisation LAZY
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-        const historyText = history.map(m => `[${m.from === 'player' ? 'JOUEUR' : 'MOI'}] : "${m.content}"`).join('\n');
-        const context = targetName ? `Cible: ${targetName}\nHistorique:\n${historyText}\n\n` : '';
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-latest', // CORRECTION : Passage au modèle 2.5 Flash
-            contents: context + query,
-            config: { 
-              systemInstruction: "CONSEILLER DIPLOMATIQUE CYNIQUE. Analyse les deals complexes. Oublie toute session passée. Style bref, pas de markdown gras. Max 2 phrases.", 
-              maxOutputTokens: 300,
-              // thinkingConfig retiré pour compatibilité 2.5 Flash
-              safetySettings: [
-                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-              ]
-            }
-        });
-        return (response.text || "Indisponible.").replace(/\*\*/g, '');
-    }
 };
