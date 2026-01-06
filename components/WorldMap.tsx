@@ -5,6 +5,7 @@ import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocess
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
+import { VectorBorders } from './VectorBorders';
 
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
@@ -62,6 +63,9 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
             opacity={cameraDistance < 8 ? 0.08 : 0} // Subtle grid when close
          />
       </mesh>
+
+      {/* ✨✨✨ LES NOUVELLES FRONTIÈRES VECTORIELLES ✨✨✨ */}
+      <VectorBorders radius={5} />
 
       {/* MARQUEURS STRATÉGIQUES */}
       {Array.isArray(countries) && countries.map((country) => (
