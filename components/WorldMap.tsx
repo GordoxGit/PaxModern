@@ -1,65 +1,102 @@
 import React, { useMemo, Suspense, useRef, useState } from 'react';
 import { Canvas, useLoader, useFrame } from '@react-three/fiber';
-import { OrbitControls, Html, Loader, Billboard, Text } from '@react-three/drei';
-import { EffectComposer, Vignette, Noise } from '@react-three/postprocessing';
+import { OrbitControls, Stars, Html, Loader, Billboard, Text } from '@react-three/drei';
+import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 
-// --- TEXTURE POLITIQUE STYLE HOI4 ---
-// Utilisation d'une carte politique haute résolution au lieu d'une photo satellite
+// --- TEXTURES CONFIG ---
 const TEXTURES = {
-  // Carte politique plate (Couleurs distinctes par pays)
-  // NOTE: URL originale indisponible, passage en mode "Papier Vierge" (Plan B)
-  political: null,
-  // Texture de "bruit" papier pour donner un aspect carte ancienne/tactique (Optionnel, on utilise un normal map générique)
-  paperNormal: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg'
+  // 1. TEXTURE GLOBE (Vue de loin) - Style "Solar System Scope" (Realistic Blue Marble)
+  // Source: Wikimedia (Fiable CORS)
+  baseMap: 'https://upload.wikimedia.org/wikipedia/commons/8/83/Equirectangular_projection_SW.jpg',
+
+  // 2. TEXTURE RELIEF (Normal Map) - Pour donner du volume aux montagnes
+  // Source: Three.js Repo
+  bumpMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
+
+  // 3. TEXTURE ZOOM (Vue de près) - Frontières et Pays (Style Politique)
+  // Source: Wikimedia (Carte politique haute résolution)
+  politicalLayer: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/World_map_-_low_resolution.svg/2560px-World_map_-_low_resolution.svg.png'
 };
 
-// --- LE GLOBE POLITIQUE ---
-const PoliticalGlobe = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
+// --- COUCHE POLITIQUE (Visible uniquement au ZOOM) ---
+const PoliticalLayer = ({ zoomLevel }: { zoomLevel: number }) => {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const politicalMap = useLoader(THREE.TextureLoader, TEXTURES.politicalLayer);
+
+  useFrame(() => {
+    if (meshRef.current) {
+      // LOGIQUE : Invisible de loin (> 10), Apparaît progressivement quand on zoom (< 8)
+      const opacity = THREE.MathUtils.clamp(1 - (zoomLevel - 6) / 3, 0, 0.9);
+
+      const material = meshRef.current.material as THREE.MeshStandardMaterial;
+      material.opacity = opacity;
+      material.visible = opacity > 0.01;
+    }
+  });
+
+  return (
+    <mesh ref={meshRef} scale={[1.002, 1.002, 1.002]}> {/* Juste au dessus de la texture de base */}
+      <sphereGeometry args={[5, 128, 128]} />
+      <meshStandardMaterial
+        map={politicalMap}
+        transparent={true}
+        blending={THREE.NormalBlending} // Se superpose normalement
+        roughness={1}
+        metalness={0}
+      />
+    </mesh>
+  );
+};
+
+// --- LE GLOBE ---
+const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
 
-  // Chargement des textures (Uniquement Normal Map pour le relief papier)
-  const normalMap = useLoader(THREE.TextureLoader, TEXTURES.paperNormal);
+  // Chargement des textures de base
+  const [baseMap, normalMap] = useLoader(THREE.TextureLoader, [
+    TEXTURES.baseMap,
+    TEXTURES.bumpMap
+  ]);
 
   const [cameraDistance, setCameraDistance] = useState(15);
 
   useFrame((state) => {
     const dist = state.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-    if (Math.abs(dist - cameraDistance) > 0.5) {
+    if (Math.abs(dist - cameraDistance) > 0.1) {
       setCameraDistance(dist);
       onZoomChange(dist);
     }
   });
 
   return (
-    <group rotation={[0, -Math.PI / 2, 0]}> {/* Rotation pour aligner le méridien */}
+    <group rotation={[0, 0, 0.2]}>
 
-      {/* 1. LA PLANÈTE (Style Carte Papier/Politique) */}
+      {/* 1. PLANÈTE BASE (Réaliste de loin) */}
       <mesh receiveShadow castShadow>
-        <sphereGeometry args={[5, 128, 128]} />
-        <meshStandardMaterial
-          normalMap={normalMap}
-          normalScale={new THREE.Vector2(0.2, 0.2)} // Juste un peu de relief papier
-          roughness={0.9} // Très mat (aspect papier)
-          metalness={0.0} // Pas de métal
-          color="#d4d4d4" // Gris/Beige Papier (Fallback car texture politique indisponible)
-        />
-      </mesh>
-
-      {/* 2. FRONTIÈRES ACCENTUÉES (Wireframe subtil) */}
-      <mesh scale={[1.001, 1.001, 1.001]}>
         <sphereGeometry args={[5, 64, 64]} />
-        <meshBasicMaterial
-          color="#000000"
-          wireframe
-          transparent
-          opacity={0.05} // Grille de latitude/longitude très fine style carte d'état major
+        <meshStandardMaterial
+          map={baseMap}
+          normalMap={normalMap}
+          normalScale={new THREE.Vector2(0.5, 0.5)}
+          roughness={0.7}
+          metalness={0.1}
+          color="#aaaaaa" // Un peu plus sombre pour le style "War Room"
         />
       </mesh>
 
-      {/* 3. MARQUEURS STRATÉGIQUES */}
+      {/* 2. ATMOSPHÈRE (Glow) */}
+      <mesh scale={[1.02, 1.02, 1.02]}>
+        <sphereGeometry args={[5, 64, 64]} />
+        <meshStandardMaterial color="#4488ff" transparent opacity={0.1} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
+      </mesh>
+
+      {/* 3. COUCHE ZOOM (Politique) */}
+      <PoliticalLayer zoomLevel={cameraDistance} />
+
+      {/* 4. MARQUEURS & TEXTES */}
       {countries.map((country) => (
         <StrategicMarker
           key={country.id}
@@ -76,61 +113,49 @@ const PoliticalGlobe = ({ onZoomChange }: { onZoomChange: (d: number) => void })
   );
 };
 
-// --- MARQUEUR HOI4 STYLE ---
+// --- MARQUEUR STRATÉGIQUE (Pion + Texte 3D) ---
 const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) => {
-  // Correction de la rotation de texture (-90 deg longitude)
-  const position = useMemo(() => latLngToVector3(country.lat, country.lng - 90, 5.05), [country.lat, country.lng]);
+  const position = useMemo(() => latLngToVector3(country.lat, country.lng, 5.03), [country.lat, country.lng]);
+  const color = isSelected ? '#ffd700' : '#ffffff';
 
-  // Couleurs style HOI4 (Pastel/Mat)
-  const color = isSelected ? '#ffcc00' : '#ffffff';
-
-  // Afficher les noms plus tôt
-  const showText = cameraDistance > 6 || isSelected;
+  // Afficher les noms plus tôt (dès 8 unités de distance)
+  const showText = cameraDistance > 8 || isSelected;
 
   return (
     <group position={position}>
-      {/* Base du marqueur (Disque plat style pion de jeu de plateau) */}
-      <mesh
-        onClick={onClick}
-        onPointerOver={() => document.body.style.cursor = 'pointer'}
-        onPointerOut={() => document.body.style.cursor = 'auto'}
-        rotation={[Math.PI / 2, 0, 0]} // A plat sur la surface
-      >
-        <cylinderGeometry args={[0.08, 0.08, 0.02, 32]} />
-        <meshStandardMaterial color={isSelected ? "#444444" : "#222222"} />
+      {/* Pion physique */}
+      <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'}>
+        <sphereGeometry args={[0.04, 16, 16]} />
+        <meshStandardMaterial color={isSelected ? "#4ade80" : "#3b82f6"} emissive={isSelected ? "#4ade80" : "#000"} emissiveIntensity={0.5} />
       </mesh>
 
-      {/* Centre coloré */}
-      <mesh position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]}>
-         <cylinderGeometry args={[0.05, 0.05, 0.04, 32]} />
-         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} />
-      </mesh>
+      {/* Laser vertical si sélectionné */}
+      {isSelected && (
+        <mesh position={[0, 0.5, 0]}>
+          <cylinderGeometry args={[0.01, 0.01, 1, 8]} />
+          <meshBasicMaterial color={color} transparent opacity={0.6} blending={THREE.AdditiveBlending} />
+        </mesh>
+      )}
 
-      {/* Drapeau / Nom Flottant */}
+      {/* TEXTE 3D (Billboard pour faire face à la caméra) */}
       <Billboard
-        position={[0, 0.6, 0]}
+        position={[0, 0.25, 0]}
         follow={true}
         lockX={false}
         lockY={false}
         lockZ={false}
       >
         {showText && (
-          <group>
-            {/* Fond du texte */}
-            <mesh position={[0, 0, -0.01]}>
-              <planeGeometry args={[1.5, 0.4]} />
-              <meshBasicMaterial color="#000000" transparent opacity={0.6} />
-            </mesh>
-            <Text
-              fontSize={0.25}
-              color="white"
-              anchorX="center"
-              anchorY="middle"
-              // font prop removed to use default font (original URL 404)
-            >
-              {country.name_fr?.toUpperCase() || country.name.toUpperCase()}
-            </Text>
-          </group>
+          <Text
+            fontSize={0.2}
+            color="white"
+            anchorX="center"
+            anchorY="middle"
+            outlineWidth={0.02}
+            outlineColor="#000000"
+          >
+            {country.name_fr?.toUpperCase() || country.name.toUpperCase()}
+          </Text>
         )}
       </Billboard>
     </group>
@@ -140,48 +165,46 @@ const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) 
 // --- SCÈNE PRINCIPALE ---
 export const WorldMap: React.FC = () => {
   return (
-    <div className="w-full h-full bg-[#1a1a1a] relative"> {/* Fond Gris Foncé "War Room" */}
+    <div className="w-full h-full bg-[#050a14] relative">
       <Canvas
-        camera={{ position: [0, 0, 16], fov: 40 }}
-        gl={{ antialias: true }}
+        camera={{ position: [0, 0, 16], fov: 45 }}
+        gl={{ antialias: false, powerPreference: "high-performance" }}
         dpr={[1, 1.5]}
         shadows
       >
         <Suspense fallback={null}>
+          <ambientLight intensity={0.5} />
+          <directionalLight position={[15, 5, 5]} intensity={1.5} color="#fff5e6" />
+          <pointLight position={[-10, -5, -5]} intensity={5} color="#0055ff" distance={30} />
 
-          {/* Éclairage "Salle de guerre" (Plat et lumineux) */}
-          <ambientLight intensity={1.5} />
-          <directionalLight position={[5, 10, 7]} intensity={1.0} castShadow />
+          <Stars radius={300} depth={50} count={3000} factor={4} fade />
 
-          {/* Pas d'étoiles, juste le vide sombre */}
-
-          <PoliticalGlobe onZoomChange={() => {}} />
+          <EarthGroup onZoomChange={() => {}} />
 
           <OrbitControls
             enablePan={false}
-            minDistance={5.5}
+            minDistance={5.2}
             maxDistance={35}
             rotateSpeed={0.5}
             zoomSpeed={0.7}
-            dampingFactor={0.1}
+            dampingFactor={0.05}
             enableDamping
           />
 
           <EffectComposer disableNormalPass>
-            {/* Grain léger pour l'effet papier/carte ancienne */}
-            <Noise opacity={0.05} />
-            {/* Vignette pour focus le centre de la table */}
-            <Vignette eskil={false} offset={0.3} darkness={0.6} />
+            <Bloom luminanceThreshold={0.5} mipmapBlur intensity={1.0} radius={0.5} />
+            <Noise opacity={0.02} />
+            <Vignette eskil={false} offset={0.1} darkness={1.1} />
           </EffectComposer>
         </Suspense>
       </Canvas>
 
       <Loader
-        containerStyles={{ background: '#1a1a1a' }}
-        innerStyles={{ background: '#333', width: '200px', height: '4px' }}
-        barStyles={{ background: '#fbbf24', height: '4px' }} // Jaune tactique
+        containerStyles={{ background: '#050a14' }}
+        innerStyles={{ background: '#1e293b', width: '200px', height: '2px' }}
+        barStyles={{ background: '#3b82f6', height: '2px' }}
         dataStyles={{ display: 'none' }}
-        dataInterpolation={() => "DÉPLOIEMENT CARTE STRATÉGIQUE..."}
+        dataInterpolation={() => "CONNEXION SATELLITE..."}
       />
     </div>
   );
