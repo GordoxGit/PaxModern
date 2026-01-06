@@ -1,141 +1,151 @@
-import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import React, { useMemo } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Stars, Html } from '@react-three/drei';
+import { EffectComposer, Bloom, Vignette, TiltShift2, Noise } from '@react-three/postprocessing';
+import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
-import L from 'leaflet';
+import { latLngToVector3 } from '../utils/geo';
 
-const createCustomIcon = (isSelected: boolean) => {
-  const size = isSelected ? 'w-6 h-6' : 'w-4 h-4';
-  const ring = isSelected ? 'ring-4 ring-blue-500/50' : 'ring-2 ring-blue-400/30';
-  
-  return L.divIcon({
-    className: 'bg-transparent',
-    html: `
-      <div class="relative flex items-center justify-center">
-        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"></span>
-        <div class="relative inline-flex rounded-full ${size} bg-blue-500 border-2 border-white shadow-lg shadow-blue-500/50 ${ring} transition-all duration-300"></div>
-      </div>
-    `,
-    iconSize: [20, 20],
-    iconAnchor: [10, 10],
-    popupAnchor: [0, -15]
-  });
+// --- COMPOSANT : LA TERRE (Base) ---
+const Earth = () => {
+  return (
+    <mesh receiveShadow castShadow>
+      <sphereGeometry args={[5, 64, 64]} />
+      {/* Matériau style "Hologramme Sombre" pour Pax Modern */}
+      <meshStandardMaterial
+        color="#1a2b4b"
+        emissive="#0a101a"
+        roughness={0.7}
+        metalness={0.5}
+        wireframe={false} // Mettre true pour un look encore plus cyber
+      />
+    </mesh>
+  );
 };
 
-const createCityLabelIcon = (name: string, isCapital: boolean) => {
-  return L.divIcon({
-    className: 'bg-transparent',
-    html: `
-      <div class="flex flex-col items-center pointer-events-none drop-shadow-md">
-        <div class="${isCapital ? 'text-yellow-400 text-xs' : 'text-gray-500 text-[10px]'} leading-none mb-1">
-           ${isCapital ? '⭐' : '•'}
-        </div>
-        <div class="whitespace-nowrap ${isCapital ? 'text-white font-bold text-[11px] uppercase tracking-wider' : 'text-gray-400 text-[9px] font-medium'} bg-black/70 px-2 py-0.5 rounded border border-gray-700/50 backdrop-blur-sm">
-          ${name}
-        </div>
-      </div>
-    `,
-    iconSize: [0, 0],
-    iconAnchor: [0, 0]
-  });
+// --- COMPOSANT : ATMOSPHÈRE (Glow) ---
+const Atmosphere = () => {
+  return (
+    <mesh scale={[1.1, 1.1, 1.1]}>
+      <sphereGeometry args={[5, 64, 64]} />
+      <meshBasicMaterial
+        color="#4db2ff"
+        transparent
+        opacity={0.1}
+        side={THREE.BackSide}
+        blending={THREE.AdditiveBlending}
+      />
+    </mesh>
+  );
 };
 
-const MapController = () => {
-  const map = useMap();
-  return null;
-};
+// --- COMPOSANT : MARQUEURS PAYS ---
+const CountryMarker = ({ country, isSelected, onClick }: any) => {
+  // Conversion Lat/Lng -> 3D
+  const position = useMemo(() => {
+    return latLngToVector3(country.lat, country.lng, 5.05); // Rayon 5 + un peu de marge
+  }, [country.lat, country.lng]);
 
-export const WorldMap: React.FC = () => {
-  const { countries, selectCountry, selectedCountry } = useGameStore();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  if (!mounted) return <div className="w-full h-full bg-gray-900" />;
+  const color = isSelected ? '#4ade80' : '#3b82f6'; // Vert si sélectionné, Bleu sinon
 
   return (
-    <div className="w-full h-full bg-[#0a101a] relative overflow-hidden">
-      
-      <MapContainer
-        center={[30, 0]}
-        zoom={3}
-        style={{ height: '100%', width: '100%', background: '#0a101a' }}
-        minZoom={2}
-        maxZoom={8}
-        zoomControl={false}
-        attributionControl={false}
-        className="z-0"
+    <group position={position}>
+      {/* Le Point lumineux */}
+      <mesh onClick={onClick}>
+        <sphereGeometry args={[0.08, 16, 16]} />
+        <meshBasicMaterial color={color} toneMapped={false} />
+      </mesh>
+
+      {/* Le Rayon vertical (Pillar of light) */}
+      {isSelected && (
+        <mesh position={[0, 0.5, 0]}>
+          <cylinderGeometry args={[0.02, 0.02, 1, 8]} />
+          <meshBasicMaterial color={color} transparent opacity={0.6} blending={THREE.AdditiveBlending} />
+        </mesh>
+      )}
+
+      {/* Étiquette HTML flottante (Drei) */}
+      <Html distanceFactor={15} occlude>
+        <div className={`pointer-events-none px-2 py-1 rounded border backdrop-blur-md transition-all ${
+          isSelected
+            ? 'bg-green-900/80 border-green-500 text-green-100 scale-110 z-50'
+            : 'bg-blue-900/50 border-blue-500/30 text-blue-200 opacity-70'
+        }`}>
+          <div className="text-[10px] font-bold uppercase tracking-widest whitespace-nowrap">
+            {country.name_fr || country.name}
+          </div>
+        </div>
+      </Html>
+    </group>
+  );
+};
+
+// --- SCÈNE PRINCIPALE ---
+export const WorldMap: React.FC = () => {
+  const { countries, selectCountry, selectedCountry } = useGameStore();
+
+  return (
+    <div className="w-full h-full bg-[#050a14] relative">
+      <Canvas
+        camera={{ position: [0, 0, 12], fov: 45 }}
+        gl={{ antialias: false }} // Désactivé car géré par Postprocessing
+        dpr={[1, 2]} // Performance pour écrans haute densité
+        shadows
       >
-        <MapController />
-        
-        {/* CARTO DB DARK MATTER - Style "Jeu Vidéo / War Room" avec Frontières */}
-        <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          className="map-tiles-filter"
-          attribution=""
+        {/* 1. ÉCLAIRAGE */}
+        <ambientLight intensity={0.5} color="#4db2ff" />
+        <pointLight position={[10, 10, 10]} intensity={2} color="#ffecd1" />
+        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+
+        {/* 2. LE MONDE */}
+        <group rotation={[0, 0, 0.2]}> {/* Tilt léger de la terre */}
+           <Earth />
+           <Atmosphere />
+
+           {/* 3. LES PAYS (Instanciés virtuellement ici, optimisation plus tard) */}
+           {countries.map((country) => (
+             <CountryMarker
+               key={country.id}
+               country={country}
+               isSelected={selectedCountry === country.id}
+               onClick={(e: any) => {
+                 e.stopPropagation();
+                 selectCountry(country.id);
+               }}
+             />
+           ))}
+        </group>
+
+        {/* 4. CONTRÔLES CAMÉRA */}
+        <OrbitControls
+          enablePan={false}
+          minDistance={6}
+          maxDistance={20}
+          rotateSpeed={0.5}
+          zoomSpeed={0.8}
+          autoRotate={!selectedCountry} // Tourne tout seul si rien n'est sélectionné
+          autoRotateSpeed={0.5}
         />
 
-        {countries.map(country => 
-          country.cities?.map((city, idx) => (
-            <Marker 
-              key={`${country.id}-city-${idx}`}
-              position={[city.lat, city.lng]}
-              icon={createCityLabelIcon(city.name, city.is_capital)}
-              interactive={false}
-            />
-          ))
-        )}
+        {/* 5. POST-PROCESSING (Le "Eye Candy") */}
+        <EffectComposer disableNormalPass>
+          {/* Bloom : Fait briller les néons et les marqueurs */}
+          <Bloom luminanceThreshold={0.2} mipmapBlur intensity={1.5} radius={0.6} />
 
-        {countries.map((country) => (
-          <Marker 
-            key={country.id} 
-            position={[country.lat, country.lng]}
-            icon={createCustomIcon(selectedCountry === country.id)}
-            eventHandlers={{
-              click: () => selectCountry(country.id),
-            }}
-          >
-            <Popup className="custom-popup">
-              <div className="bg-gray-900 text-gray-100 p-2 border border-blue-500/30 rounded min-w-[150px]">
-                <strong className="text-sm uppercase tracking-widest text-blue-400 block mb-1 border-b border-gray-700 pb-1">
-                  {country.name_fr || country.name}
-                </strong>
-                <div className="text-xs text-gray-300">
-                  <div>Leader: <span className="text-white">{country.leader_name}</span></div>
-                  <div>PIB: <span className="text-green-400">${country.economy.gdp}B</span></div>
-                </div>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
-      
-      {/* Effet CRT / Scanline léger pour le look "Ecran de contrôle" */}
-      <div className="absolute inset-0 pointer-events-none z-[500] opacity-10 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
+          {/* Noise : Grain de film pour l'aspect réaliste/sale */}
+          <Noise opacity={0.05} />
 
-      <style>{`
-        /* Ajustement léger pour booster le contraste sur la carte sombre */
-        .map-tiles-filter {
-          filter: contrast(110%) brightness(100%); 
-        }
-        .leaflet-popup-content-wrapper {
-          background: rgba(17, 24, 39, 0.95) !important;
-          border: 1px solid rgba(59, 130, 246, 0.4);
-          border-radius: 4px !important;
-          color: white !important;
-        }
-        .leaflet-popup-tip {
-          background: rgba(17, 24, 39, 0.95) !important;
-        }
-        .leaflet-container {
-          outline: 0;
-          background: #111827;
-        }
-        .leaflet-control-attribution {
-          display: none !important;
-        }
-      `}</style>
+          {/* Vignette : Assombrit les bords pour focus cinéma */}
+          <Vignette eskil={false} offset={0.1} darkness={1.1} />
+
+          {/* TiltShift : Effet "Maquette" (Focus au centre, flou en haut/bas) */}
+          <TiltShift2 blur={0.15} />
+        </EffectComposer>
+
+      </Canvas>
+
+      {/* Overlay UI Grid (Décoratif) */}
+      <div className="absolute inset-0 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 mix-blend-overlay"></div>
     </div>
   );
 };
