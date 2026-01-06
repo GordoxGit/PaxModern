@@ -12,7 +12,13 @@ import { IntelFeed } from './IntelFeed';
 export const GameLayout: React.FC = () => {
   const { selectedCountry, countries, currentGame, openConversation, toggleAdvisor, isAdvisorOpen, selectCountry } = useGameStore();
   
-  const selectedCountryData = countries.find(c => c.id === selectedCountry);
+  // SÉCURITÉ : Si les données critiques sont absentes, on affiche un loader au lieu de crasher
+  if (!currentGame || !countries) {
+    return <div className="flex h-screen w-screen items-center justify-center bg-gray-900 text-blue-500 font-mono animate-pulse">CHARGEMENT DES DONNÉES GÉOPOLITIQUES...</div>;
+  }
+
+  // SÉCURITÉ : Vérifier que countries est bien un tableau avant le .find
+  const selectedCountryData = Array.isArray(countries) ? countries.find(c => c.id === selectedCountry) : null;
   
   const isPlayerCountry = currentGame?.player_country === selectedCountryData?.id;
 

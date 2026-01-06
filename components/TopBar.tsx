@@ -21,13 +21,17 @@ export const TopBar: React.FC = () => {
         <h1 className="text-sm md:text-xl font-bold text-white tracking-tight">
           PAX <span className="text-blue-500">MODERN</span>
         </h1>
-        {currentGame && (
+        {currentGame && currentGame.player_leader ? (
           <div className="hidden sm:flex items-center space-x-2 text-gray-400 text-[10px] md:text-sm border-l border-gray-700 pl-2 md:pl-4">
-            <span className="font-medium text-gray-200 truncate max-w-[80px] md:max-w-none">{currentGame.player_country}</span>
+            <span className="font-medium text-gray-200 truncate max-w-[80px] md:max-w-none">
+              {currentGame.player_country || "Pays Inconnu"}
+            </span>
             <span className="hidden md:inline">•</span>
-            <span className="hidden lg:inline">{currentGame.player_leader.name}</span>
+            <span className="hidden lg:inline">
+              {currentGame.player_leader.name || "Dirigeant"}
+            </span>
           </div>
-        )}
+        ) : null}
       </div>
 
       <div className="flex items-center space-x-2 md:space-x-6">
