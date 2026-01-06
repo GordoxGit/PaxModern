@@ -108,7 +108,7 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
       <PoliticalLayer zoomLevel={cameraDistance} />
 
       {/* ... Markers ... */}
-      {countries.map((country) => (
+      {Array.isArray(countries) && countries.map((country) => (
         <StrategicMarker
           key={country.id}
           country={country}
