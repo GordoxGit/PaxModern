@@ -8,16 +8,16 @@ import { latLngToVector3 } from '../utils/geo';
 
 // --- TEXTURES CONFIG ---
 const TEXTURES = {
-  // 1. TEXTURE GLOBE (Vue de loin) - Style "Solar System Scope" (Realistic Blue Marble)
-  // Source: Wikimedia (Fiable CORS)
-  baseMap: 'https://upload.wikimedia.org/wikipedia/commons/8/83/Equirectangular_projection_SW.jpg',
+  // Texture sombre avec bathymétrie (profondeur océans) pour le look "Stratégique"
+  baseMap: 'https://upload.wikimedia.org/wikipedia/commons/1/1c/Blue_Marble_Next_Generation_%2B_topography_%2B_bathymetry.jpg',
 
-  // 2. TEXTURE RELIEF (Normal Map) - Pour donner du volume aux montagnes
-  // Source: Three.js Repo
-  bumpMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
+  // Relief très marqué
+  normalMap: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/Earth_normal_map_8k.jpg/2048px-Earth_normal_map_8k.jpg',
 
-  // 3. TEXTURE ZOOM (Vue de près) - Frontières et Pays (Style Politique)
-  // Source: Wikimedia (Carte politique haute résolution)
+  // Masque pour que l'eau brille (effet carte plastifiée) et la terre soit mate
+  specularMap: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Earth_specular_map.png/2048px-Earth_specular_map.png',
+
+  // Couche frontières (On garde la tienne ou on prend une version plus fine/blanche)
   politicalLayer: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/World_map_-_low_resolution.svg/2560px-World_map_-_low_resolution.svg.png'
 };
 
@@ -55,10 +55,11 @@ const PoliticalLayer = ({ zoomLevel }: { zoomLevel: number }) => {
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
 
-  // Chargement des textures de base
-  const [baseMap, normalMap] = useLoader(THREE.TextureLoader, [
+  // Chargement des 3 textures critiques
+  const [baseMap, normalMap, specularMap] = useLoader(THREE.TextureLoader, [
     TEXTURES.baseMap,
-    TEXTURES.bumpMap
+    TEXTURES.normalMap,
+    TEXTURES.specularMap
   ]);
 
   const [cameraDistance, setCameraDistance] = useState(15);
@@ -73,30 +74,40 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
 
   return (
     <group rotation={[0, 0, 0.2]}>
-
-      {/* 1. PLANÈTE BASE (Réaliste de loin) */}
+      {/* 1. PLANÈTE BASE STYLE "WAR ROOM" */}
       <mesh receiveShadow castShadow>
-        <sphereGeometry args={[5, 64, 64]} />
+        <sphereGeometry args={[5, 128, 128]} /> {/* Augmenté à 128 segments pour que les montagnes soient propres */}
         <meshStandardMaterial
           map={baseMap}
           normalMap={normalMap}
-          normalScale={new THREE.Vector2(0.5, 0.5)}
-          roughness={0.7}
-          metalness={0.1}
-          color="#aaaaaa" // Un peu plus sombre pour le style "War Room"
+          roughnessMap={specularMap} // Utilise le masque d'eau pour la rugosité
+
+          // SETTINGS HOI4 :
+          color="#b0b0b0"            // On assombrit la texture de base (gris) pour faire "sérieux"
+          normalScale={new THREE.Vector2(2, 2)} // On force le relief à fond (X4 par rapport à avant)
+          roughness={0.8}            // Base assez mate
+          metalness={0.2}            // Légère touche métallique pour l'aspect "Table de jeu"
+          emissive="#001133"         // Légère émission bleu nuit dans les ombres pour éviter le noir total
+          emissiveIntensity={0.1}
         />
       </mesh>
 
-      {/* 2. ATMOSPHÈRE (Glow) */}
-      <mesh scale={[1.02, 1.02, 1.02]}>
+      {/* 2. ATMOSPHÈRE (On la rend plus subtile, moins "Espace", plus "Hologramme") */}
+      <mesh scale={[1.01, 1.01, 1.01]}>
         <sphereGeometry args={[5, 64, 64]} />
-        <meshStandardMaterial color="#4488ff" transparent opacity={0.1} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
+        <meshStandardMaterial
+            color="#2a4c80"
+            transparent
+            opacity={0.05}
+            side={THREE.BackSide}
+            blending={THREE.AdditiveBlending}
+        />
       </mesh>
 
-      {/* 3. COUCHE ZOOM (Politique) */}
+      {/* 3. COUCHE POLITIQUE (Reste inchangée mais s'affichera mieux sur le fond sombre) */}
       <PoliticalLayer zoomLevel={cameraDistance} />
 
-      {/* 4. MARQUEURS & TEXTES */}
+      {/* ... Markers ... */}
       {countries.map((country) => (
         <StrategicMarker
           key={country.id}
@@ -173,9 +184,14 @@ export const WorldMap: React.FC = () => {
         shadows
       >
         <Suspense fallback={null}>
-          <ambientLight intensity={0.5} />
-          <directionalLight position={[15, 5, 5]} intensity={1.5} color="#fff5e6" />
-          <pointLight position={[-10, -5, -5]} intensity={5} color="#0055ff" distance={30} />
+          <ambientLight intensity={0.2} /> {/* Ambiance très faible pour garder le contraste */}
+          <directionalLight
+              position={[50, 20, 30]} // Lumière venant de côté/haut
+              intensity={2.5}         // Très forte pour créer des ombres nettes sur les montagnes
+              color="#ffeedd"         // Lumière légèrement chaude (lampe de bureau)
+              castShadow
+          />
+          <pointLight position={[-10, -10, -10]} intensity={1} color="#002266" /> {/* Contre-jour bleu nuit (Fill light) */}
 
           <Stars radius={300} depth={50} count={3000} factor={4} fade />
 
