@@ -1,78 +1,93 @@
-import React, { useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import React, { useMemo, Suspense } from 'react';
+import { Canvas, useLoader } from '@react-three/fiber';
 import { OrbitControls, Stars, Html } from '@react-three/drei';
-import { EffectComposer, Bloom, Vignette, TiltShift2, Noise } from '@react-three/postprocessing';
+import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 
-// --- COMPOSANT : LA TERRE (Base) ---
-const Earth = () => {
-  return (
-    <mesh receiveShadow castShadow>
-      <sphereGeometry args={[5, 64, 64]} />
-      {/* Matériau style "Hologramme Sombre" pour Pax Modern */}
-      <meshStandardMaterial
-        color="#1a2b4b"
-        emissive="#0a101a"
-        roughness={0.7}
-        metalness={0.5}
-        wireframe={false} // Mettre true pour un look encore plus cyber
-      />
-    </mesh>
-  );
+// --- LIENS VERS LES TEXTURES HD (NASA / Solar System Scope) ---
+const EARTH_TEXTURES = {
+  map: 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg', // Texture de base
+  bump: 'https://unpkg.com/three-globe/example/img/earth-topology.png', // Relief (Montagnes)
+  specular: 'https://unpkg.com/three-globe/example/img/earth-water.png', // Reflets Océans
+  lights: 'https://unpkg.com/three-globe/example/img/earth-night-lights.png' // Lumières de nuit (Optionnel)
 };
 
-// --- COMPOSANT : ATMOSPHÈRE (Glow) ---
-const Atmosphere = () => {
+// --- COMPOSANT : LA TERRE (HOI4 STYLE) ---
+const Earth = () => {
+  // Chargement des textures
+  const [colorMap, bumpMap, specularMap] = useLoader(THREE.TextureLoader, [
+    EARTH_TEXTURES.map,
+    EARTH_TEXTURES.bump,
+    EARTH_TEXTURES.specular
+  ]);
+
   return (
-    <mesh scale={[1.1, 1.1, 1.1]}>
-      <sphereGeometry args={[5, 64, 64]} />
-      <meshBasicMaterial
-        color="#4db2ff"
-        transparent
-        opacity={0.1}
-        side={THREE.BackSide}
-        blending={THREE.AdditiveBlending}
-      />
-    </mesh>
+    <group rotation={[0, 0, 0.2]}> {/* Inclinaison naturelle */}
+      {/* Globe Principal */}
+      <mesh receiveShadow castShadow>
+        <sphereGeometry args={[5, 128, 128]} /> {/* Haute résolution géométrique */}
+        <meshStandardMaterial
+          map={colorMap}
+          bumpMap={bumpMap}
+          bumpScale={0.15} // Hauteur des montagnes (Effet HOI4)
+          roughnessMap={specularMap}
+          roughness={0.8}
+          metalness={0.2}
+          emissive="#112244" // Légère lueur bleue interne
+          emissiveIntensity={0.1}
+        />
+      </mesh>
+
+      {/* Atmosphère (Glow externe) */}
+      <mesh scale={[1.02, 1.02, 1.02]}>
+        <sphereGeometry args={[5, 64, 64]} />
+        <meshStandardMaterial
+          color="#4488ff"
+          transparent
+          opacity={0.15}
+          side={THREE.BackSide} // Affiche l'intérieur de la sphère pour l'effet halo
+          blending={THREE.AdditiveBlending}
+        />
+      </mesh>
+    </group>
   );
 };
 
 // --- COMPOSANT : MARQUEURS PAYS ---
 const CountryMarker = ({ country, isSelected, onClick }: any) => {
-  // Conversion Lat/Lng -> 3D
   const position = useMemo(() => {
-    return latLngToVector3(country.lat, country.lng, 5.05); // Rayon 5 + un peu de marge
+    return latLngToVector3(country.lat, country.lng, 5.02);
   }, [country.lat, country.lng]);
 
-  const color = isSelected ? '#4ade80' : '#3b82f6'; // Vert si sélectionné, Bleu sinon
+  const color = isSelected ? '#4ade80' : '#3b82f6';
 
   return (
     <group position={position}>
-      {/* Le Point lumineux */}
+      {/* Point sur la carte */}
       <mesh onClick={onClick}>
-        <sphereGeometry args={[0.08, 16, 16]} />
+        <sphereGeometry args={[0.06, 16, 16]} />
         <meshBasicMaterial color={color} toneMapped={false} />
       </mesh>
 
-      {/* Le Rayon vertical (Pillar of light) */}
+      {/* Pylône Lumineux */}
       {isSelected && (
-        <mesh position={[0, 0.5, 0]}>
-          <cylinderGeometry args={[0.02, 0.02, 1, 8]} />
-          <meshBasicMaterial color={color} transparent opacity={0.6} blending={THREE.AdditiveBlending} />
+        <mesh position={[0, 0.6, 0]}>
+          <cylinderGeometry args={[0.01, 0.04, 1.2, 8]} />
+          <meshBasicMaterial color={color} transparent opacity={0.8} blending={THREE.AdditiveBlending} toneMapped={false} />
         </mesh>
       )}
 
-      {/* Étiquette HTML flottante (Drei) */}
-      <Html distanceFactor={15} occlude>
-        <div className={`pointer-events-none px-2 py-1 rounded border backdrop-blur-md transition-all ${
+      {/* Label UI */}
+      <Html distanceFactor={12} occlude>
+        <div className={`pointer-events-none px-3 py-1 rounded-sm border backdrop-blur-md transition-all duration-300 font-mono ${
           isSelected
-            ? 'bg-green-900/80 border-green-500 text-green-100 scale-110 z-50'
-            : 'bg-blue-900/50 border-blue-500/30 text-blue-200 opacity-70'
+            ? 'bg-green-900/90 border-green-500 text-green-100 scale-110 z-50 shadow-[0_0_15px_rgba(74,222,128,0.5)]'
+            : 'bg-black/60 border-blue-500/30 text-gray-300 hover:text-white hover:bg-black/80'
         }`}>
-          <div className="text-[10px] font-bold uppercase tracking-widest whitespace-nowrap">
-            {country.name_fr || country.name}
+          <div className="text-[10px] font-bold uppercase tracking-widest flex flex-col items-center">
+            {country.flag} {country.name_fr || country.name}
           </div>
         </div>
       </Html>
@@ -87,65 +102,69 @@ export const WorldMap: React.FC = () => {
   return (
     <div className="w-full h-full bg-[#050a14] relative">
       <Canvas
-        camera={{ position: [0, 0, 12], fov: 45 }}
-        gl={{ antialias: false }} // Désactivé car géré par Postprocessing
-        dpr={[1, 2]} // Performance pour écrans haute densité
+        camera={{ position: [0, 0, 14], fov: 40 }} // Caméra reculée pour vue stratégique
+        gl={{ antialias: false, powerPreference: "high-performance" }}
+        dpr={[1, 1.5]} // Optimisation performance
         shadows
       >
-        {/* 1. ÉCLAIRAGE */}
-        <ambientLight intensity={0.5} color="#4db2ff" />
-        <pointLight position={[10, 10, 10]} intensity={2} color="#ffecd1" />
-        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+        {/* Suspense gère le chargement des textures (écran blanc évité) */}
+        <Suspense fallback={null}>
 
-        {/* 2. LE MONDE */}
-        <group rotation={[0, 0, 0.2]}> {/* Tilt léger de la terre */}
-           <Earth />
-           <Atmosphere />
+          {/* ÉCLAIRAGE STRATÉGIQUE */}
+          <ambientLight intensity={0.4} color="#ccccff" /> {/* Lumière bleue froide */}
+          <directionalLight
+            position={[15, 10, 5]}
+            intensity={2.5}
+            color="#fff5e6" // Soleil chaud
+            castShadow
+          />
+          <pointLight position={[-10, -10, -5]} intensity={1} color="#0044ff" /> {/* Contre-jour bleu */}
 
-           {/* 3. LES PAYS (Instanciés virtuellement ici, optimisation plus tard) */}
-           {countries.map((country) => (
-             <CountryMarker
-               key={country.id}
-               country={country}
-               isSelected={selectedCountry === country.id}
-               onClick={(e: any) => {
-                 e.stopPropagation();
-                 selectCountry(country.id);
-               }}
-             />
-           ))}
-        </group>
+          <Stars radius={200} depth={50} count={3000} factor={4} saturation={0} fade speed={0.5} />
 
-        {/* 4. CONTRÔLES CAMÉRA */}
-        <OrbitControls
-          enablePan={false}
-          minDistance={6}
-          maxDistance={20}
-          rotateSpeed={0.5}
-          zoomSpeed={0.8}
-          autoRotate={!selectedCountry} // Tourne tout seul si rien n'est sélectionné
-          autoRotateSpeed={0.5}
-        />
+          <Earth />
 
-        {/* 5. POST-PROCESSING (Le "Eye Candy") */}
-        <EffectComposer disableNormalPass>
-          {/* Bloom : Fait briller les néons et les marqueurs */}
-          <Bloom luminanceThreshold={0.2} mipmapBlur intensity={1.5} radius={0.6} />
+          {countries.map((country) => (
+            <CountryMarker
+              key={country.id}
+              country={country}
+              isSelected={selectedCountry === country.id}
+              onClick={(e: any) => {
+                e.stopPropagation();
+                selectCountry(country.id);
+              }}
+            />
+          ))}
 
-          {/* Noise : Grain de film pour l'aspect réaliste/sale */}
-          <Noise opacity={0.05} />
+          <OrbitControls
+            enablePan={false}
+            minDistance={6.5}
+            maxDistance={25}
+            rotateSpeed={0.6}
+            zoomSpeed={0.8}
+            dampingFactor={0.05} // Mouvement fluide "Lourd"
+            enableDamping={true}
+          />
 
-          {/* Vignette : Assombrit les bords pour focus cinéma */}
-          <Vignette eskil={false} offset={0.1} darkness={1.1} />
+          {/* POST-PROCESSING (L'effet "Next-Gen") */}
+          <EffectComposer disableNormalPass>
+            {/* Bloom modéré pour faire briller les UI et l'atmosphère */}
+            <Bloom luminanceThreshold={0.6} mipmapBlur intensity={1.2} radius={0.5} />
+            {/* Grain léger pour aspect "Image Satellite en direct" */}
+            <Noise opacity={0.08} />
+            {/* Vignette pour focus central */}
+            <Vignette eskil={false} offset={0.1} darkness={1.0} />
+          </EffectComposer>
 
-          {/* TiltShift : Effet "Maquette" (Focus au centre, flou en haut/bas) */}
-          <TiltShift2 blur={0.15} />
-        </EffectComposer>
-
+        </Suspense>
       </Canvas>
 
-      {/* Overlay UI Grid (Décoratif) */}
-      <div className="absolute inset-0 pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 mix-blend-overlay"></div>
+      {/* Loader UI (s'affiche pendant le téléchargement des textures) */}
+      <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+        <div className="text-blue-500/50 text-xs font-mono animate-pulse tracking-[0.5em]">
+          INITIALISATION SATELLITE...
+        </div>
+      </div>
     </div>
   );
 };
