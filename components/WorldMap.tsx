@@ -6,26 +6,35 @@ import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 import { VectorBorders } from './VectorBorders';
+import { CityMeshes } from './CityMeshes';
 
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
   const gl = useThree((state) => state.gl);
 
-  const [baseMap, normalMap] = useLoader(THREE.TextureLoader, [
+  // On charge une "Detail Map" (Texture de roche/sol qui se répète)
+  // Utilise cette URL stable de texture de bruit
+  const [baseMap, normalMap, detailMap] = useLoader(THREE.TextureLoader, [
     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg',
-    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg'
+    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
+    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/terrain/grasslight-big.jpg'
   ], (loader) => loader.setCrossOrigin('anonymous'));
 
-  // OPTIMISATION NETTETÉ (ANISOTROPY)
+  // Configuration de la Detail Map (LE SECRET DU ZOOM NET)
   useMemo(() => {
+    detailMap.wrapS = detailMap.wrapT = THREE.RepeatWrapping;
+    detailMap.repeat.set(50, 50); // On répète la texture 50 fois -> Grain très fin
+
     const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
     baseMap.anisotropy = maxAnisotropy;
     normalMap.anisotropy = maxAnisotropy;
+    detailMap.anisotropy = maxAnisotropy;
 
     baseMap.minFilter = THREE.LinearMipMapLinearFilter;
     normalMap.minFilter = THREE.LinearMipMapLinearFilter;
-  }, [baseMap, normalMap, gl]);
+    detailMap.minFilter = THREE.LinearMipMapLinearFilter;
+  }, [baseMap, normalMap, detailMap, gl]);
 
   const [cameraDistance, setCameraDistance] = useState(15);
 
@@ -39,32 +48,35 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
 
   return (
     <group rotation={[0, 0, 0.2]}>
-      {/* 1. LA TERRE (MATTE, PAS DE FLASHS) */}
+      {/* 1. LA TERRE (Avec Detail Map pour l'effet "Jeu Vidéo") */}
       <mesh receiveShadow castShadow>
         <sphereGeometry args={[5, 128, 128]} />
         <meshStandardMaterial
           map={baseMap}
           normalMap={normalMap}
-          // PAS DE SPECULAR MAP -> Bye bye les flashs
-          color="#cccccc"            // Gris clair pour éclaircir la base
-          roughness={0.9}            // 0.9 = Aspect "Papier/Carte", très mat, pas de reflet d'eau
-          metalness={0.0}            // 0 = Pas de métal, évite les reflets bizarres
-          normalScale={new THREE.Vector2(3, 3)} // Relief très fort pour voir les montagnes
+          normalScale={new THREE.Vector2(1, 1)}
+
+          // ASTUCE DU DETAIL MAP : On mixe la couleur globale avec le détail
+          roughnessMap={detailMap}
+          roughness={1}
+          metalness={0.1}
+
+          // Assure-toi que wireframe est bien sur FALSE ou absent !
+          wireframe={false}
         />
       </mesh>
 
-      {/* 2. GRID / FRONTIÈRES TACTIQUES (Wireframe Fallback) */}
-      <mesh scale={[1.001, 1.001, 1.001]}>
-         <sphereGeometry args={[5, 48, 48]} />
-         <meshBasicMaterial
-            color="#ffffff"
-            wireframe={true}
-            transparent={true}
-            opacity={cameraDistance < 8 ? 0.08 : 0} // Subtle grid when close
-         />
+      {/* 2. ATMOSPHÈRE (Légère) */}
+      <mesh scale={[1.02, 1.02, 1.02]}>
+         <sphereGeometry args={[5, 64, 64]} />
+         <meshStandardMaterial color="#4466aa" transparent opacity={0.15} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
-      {/* ✨✨✨ LES NOUVELLES FRONTIÈRES VECTORIELLES ✨✨✨ */}
+      {/* 3. VILLES EN 3D (Nouveau !) */}
+      <CityMeshes />
+
+      {/* 4. FRONTIÈRES (VectorBorders) */}
+      {/* Vérifie que tu n'as pas laissé de grille ici. Juste les lignes. */}
       <VectorBorders radius={5} />
 
       {/* MARQUEURS STRATÉGIQUES */}
@@ -94,8 +106,8 @@ const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) 
 
   return (
     <group position={position}>
-      {/* Pion physique */}
-      <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'}>
+      {/* Pion physique - Rendu invisible mais cliquable pour garder l'interaction */}
+      <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'} visible={false}>
         <sphereGeometry args={[0.04, 16, 16]} />
         <meshStandardMaterial color={isSelected ? "#4ade80" : "#3b82f6"} emissive={isSelected ? "#4ade80" : "#000"} emissiveIntensity={0.5} />
       </mesh>
