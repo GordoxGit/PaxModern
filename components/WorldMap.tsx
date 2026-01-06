@@ -6,28 +6,25 @@ import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 
-// --- TEXTURES HD (NASA & Solar System Scope) ---
+// --- TEXTURES STABLES (CORRECTIF CORS/404) ---
 const TEXTURES = {
-  map: 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
-  bump: 'https://unpkg.com/three-globe/example/img/earth-topology.png',
-  specular: 'https://unpkg.com/three-globe/example/img/earth-water.png',
-  // Cette texture simule les villes et frontières la nuit (visible au zoom)
-  cities: 'https://unpkg.com/three-globe/example/img/earth-night-lights.png',
+  map: 'https://upload.wikimedia.org/wikipedia/commons/8/83/Equirectangular_projection_SW.jpg',
+  bump: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
+  specular: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_specular_2048.jpg',
+  cities: 'https://upload.wikimedia.org/wikipedia/commons/b/ba/The_earth_at_night.jpg',
 };
 
-// --- COUCHE DÉTAILS (Visible uniquement au ZOOM) ---
+// --- COUCHE DÉTAILS (Villes illuminées au Zoom) ---
 const DetailLayer = ({ zoomLevel }: { zoomLevel: number }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const citiesMap = useLoader(THREE.TextureLoader, TEXTURES.cities);
 
   useFrame(() => {
     if (meshRef.current) {
-      // LOGIQUE MAGIQUE : Plus on est près (distance petite), plus c'est visible
-      // Distance > 8 : Invisible
-      // Distance < 6 : Visible à 100%
-      const opacity = THREE.MathUtils.clamp(1 - (zoomLevel - 6) / 2, 0, 0.9);
-
+      // Apparition progressive quand on s'approche (Distance < 7)
+      const opacity = THREE.MathUtils.clamp(1 - (zoomLevel - 6) / 2, 0, 1);
       const material = meshRef.current.material as THREE.MeshStandardMaterial;
+
       material.opacity = opacity;
       material.visible = opacity > 0.01;
     }
@@ -39,8 +36,8 @@ const DetailLayer = ({ zoomLevel }: { zoomLevel: number }) => {
       <meshStandardMaterial
         map={citiesMap}
         transparent={true}
-        blending={THREE.AdditiveBlending} // Mode "Lumière"
-        color="#ffcc00" // Couleur Or pour les villes/frontières
+        blending={THREE.AdditiveBlending} // Les lumières s'ajoutent (effet néon)
+        color="#ffd700" // Teinte dorée
         side={THREE.DoubleSide}
         depthWrite={false}
       />
@@ -58,7 +55,6 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
   const [cameraDistance, setCameraDistance] = useState(15);
 
   useFrame((state) => {
-    // Calcul de la distance caméra en temps réel
     const dist = state.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
     if (Math.abs(dist - cameraDistance) > 0.1) {
       setCameraDistance(dist);
@@ -74,12 +70,12 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
         <meshStandardMaterial
           map={colorMap}
           bumpMap={bumpMap}
-          bumpScale={0.15}
+          bumpScale={0.1}
           roughnessMap={specularMap}
           roughness={0.7}
           metalness={0.1}
           emissive="#000510"
-          emissiveIntensity={0.4}
+          emissiveIntensity={0.2}
         />
       </mesh>
 
@@ -89,7 +85,7 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
         <meshStandardMaterial color="#4488ff" transparent opacity={0.15} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
       </mesh>
 
-      {/* Couche Zoom (Villes & Frontières) */}
+      {/* Couche Villes (Zoom) */}
       <DetailLayer zoomLevel={cameraDistance} />
 
       {/* Pays Interactifs */}
@@ -109,25 +105,21 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
   );
 };
 
-// --- MARQUEUR PAYS (Intelligent) ---
+// --- MARQUEUR PAYS ---
 const CountryMarker = ({ country, isSelected, onClick, cameraDistance }: any) => {
   const position = useMemo(() => latLngToVector3(country.lat, country.lng, 5.01), [country.lat, country.lng]);
   const color = isSelected ? '#4ade80' : '#3b82f6';
 
-  // LOGIQUE D'AFFICHAGE TEXTE
-  // Si on est loin (> 7.5), on voit les NOMS.
-  // Si on est près (< 7.5), on cache les NOMS pour voir les FRONTIÈRES.
-  const showText = cameraDistance > 7.5 || isSelected;
+  // Affichage dynamique du texte
+  const showText = cameraDistance > 8 || isSelected;
 
   return (
     <group position={position}>
-      {/* Point physique (toujours visible) */}
       <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'}>
         <sphereGeometry args={[0.04, 16, 16]} />
         <meshBasicMaterial color={color} toneMapped={false} />
       </mesh>
 
-      {/* Laser de sélection */}
       {isSelected && (
         <mesh position={[0, 0.6, 0]}>
           <cylinderGeometry args={[0.01, 0.01, 1.2, 8]} />
@@ -135,7 +127,6 @@ const CountryMarker = ({ country, isSelected, onClick, cameraDistance }: any) =>
         </mesh>
       )}
 
-      {/* Label UI (Disparaît au zoom) */}
       <Html distanceFactor={10} occlude style={{
         transition: 'opacity 0.3s',
         opacity: showText ? 1 : 0,
@@ -176,8 +167,8 @@ export const WorldMap: React.FC = () => {
 
           <OrbitControls
             enablePan={false}
-            minDistance={5.1} // ZOOM EXTRÊME (On touche presque le sol)
-            maxDistance={35}  // DÉZOOM EXTRÊME (Vue système solaire)
+            minDistance={5.2}
+            maxDistance={35}
             rotateSpeed={0.5}
             zoomSpeed={0.7}
             dampingFactor={0.05}
