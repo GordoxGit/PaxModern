@@ -1,21 +1,23 @@
 import React, { useMemo, Suspense } from 'react';
 import { Canvas, useLoader } from '@react-three/fiber';
-import { OrbitControls, Stars, Html } from '@react-three/drei';
+import { OrbitControls, Stars, Html, Loader } from '@react-three/drei'; // Ajout de Loader
 import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 
-// --- LIENS VERS LES TEXTURES HD (NASA / Solar System Scope) ---
+// Textures HD
 const EARTH_TEXTURES = {
-  map: 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg', // Texture de base
-  bump: 'https://unpkg.com/three-globe/example/img/earth-topology.png', // Relief (Montagnes)
-  specular: 'https://unpkg.com/three-globe/example/img/earth-water.png', // Reflets Océans
-  lights: 'https://unpkg.com/three-globe/example/img/earth-night-lights.png' // Lumières de nuit (Optionnel)
+  map: 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
+  bump: 'https://unpkg.com/three-globe/example/img/earth-topology.png',
+  specular: 'https://unpkg.com/three-globe/example/img/earth-water.png',
 };
 
-// --- COMPOSANT : LA TERRE (HOI4 STYLE) ---
-const Earth = () => {
+// --- LE GROUPE TERRE + MARQUEURS ---
+// On met tout ensemble pour que les points suivent la rotation de la terre
+const EarthGroup = () => {
+  const { countries, selectCountry, selectedCountry } = useGameStore();
+
   // Chargement des textures
   const [colorMap, bumpMap, specularMap] = useLoader(THREE.TextureLoader, [
     EARTH_TEXTURES.map,
@@ -24,71 +26,87 @@ const Earth = () => {
   ]);
 
   return (
-    <group rotation={[0, 0, 0.2]}> {/* Inclinaison naturelle */}
-      {/* Globe Principal */}
+    // C'EST ICI QUE TOUT SE JOUE : On applique la rotation au GROUPE PARENT
+    <group rotation={[0, 0, 0.2]}>
+
+      {/* 1. LA PLANÈTE */}
       <mesh receiveShadow castShadow>
-        <sphereGeometry args={[5, 128, 128]} /> {/* Haute résolution géométrique */}
+        <sphereGeometry args={[5, 64, 64]} />
         <meshStandardMaterial
           map={colorMap}
           bumpMap={bumpMap}
-          bumpScale={0.15} // Hauteur des montagnes (Effet HOI4)
-          roughnessMap={specularMap}
-          roughness={0.8}
-          metalness={0.2}
-          emissive="#112244" // Légère lueur bleue interne
-          emissiveIntensity={0.1}
+          bumpScale={0.15}
+          roughnessMap={specularMap} // L'océan brille, pas la terre
+          roughness={0.5}
+          metalness={0.1}
+          emissive="#001133"
+          emissiveIntensity={0.2}
         />
       </mesh>
 
-      {/* Atmosphère (Glow externe) */}
+      {/* 2. ATMOSPHÈRE */}
       <mesh scale={[1.02, 1.02, 1.02]}>
         <sphereGeometry args={[5, 64, 64]} />
         <meshStandardMaterial
           color="#4488ff"
           transparent
-          opacity={0.15}
-          side={THREE.BackSide} // Affiche l'intérieur de la sphère pour l'effet halo
+          opacity={0.1}
+          side={THREE.BackSide}
           blending={THREE.AdditiveBlending}
         />
       </mesh>
+
+      {/* 3. LES PAYS (Enfants du groupe, donc ils tournent avec la terre !) */}
+      {countries.map((country) => (
+        <CountryMarker
+          key={country.id}
+          country={country}
+          isSelected={selectedCountry === country.id}
+          onClick={(e: any) => {
+            e.stopPropagation(); // Empêche de cliquer à travers la planète
+            selectCountry(country.id);
+          }}
+        />
+      ))}
     </group>
   );
 };
 
-// --- COMPOSANT : MARQUEURS PAYS ---
+// --- COMPOSANT MARQUEUR ---
 const CountryMarker = ({ country, isSelected, onClick }: any) => {
   const position = useMemo(() => {
-    return latLngToVector3(country.lat, country.lng, 5.02);
+    // Calcul de la position (Rayon de 5 pour la terre + 0.01 pour être juste au dessus)
+    return latLngToVector3(country.lat, country.lng, 5.01);
   }, [country.lat, country.lng]);
 
   const color = isSelected ? '#4ade80' : '#3b82f6';
 
   return (
     <group position={position}>
-      {/* Point sur la carte */}
-      <mesh onClick={onClick}>
-        <sphereGeometry args={[0.06, 16, 16]} />
+      {/* Le point cliquable */}
+      <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'}>
+        <sphereGeometry args={[0.05, 16, 16]} />
         <meshBasicMaterial color={color} toneMapped={false} />
       </mesh>
 
-      {/* Pylône Lumineux */}
+      {/* Le laser vertical */}
       {isSelected && (
-        <mesh position={[0, 0.6, 0]}>
-          <cylinderGeometry args={[0.01, 0.04, 1.2, 8]} />
-          <meshBasicMaterial color={color} transparent opacity={0.8} blending={THREE.AdditiveBlending} toneMapped={false} />
+        <mesh position={[0, 0.5, 0]}>
+          <cylinderGeometry args={[0.01, 0.01, 1, 8]} />
+          <meshBasicMaterial color={color} transparent opacity={0.6} blending={THREE.AdditiveBlending} toneMapped={false} />
         </mesh>
       )}
 
-      {/* Label UI */}
-      <Html distanceFactor={12} occlude>
-        <div className={`pointer-events-none px-3 py-1 rounded-sm border backdrop-blur-md transition-all duration-300 font-mono ${
+      {/* Le Label HTML */}
+      <Html distanceFactor={10} occlude>
+        <div className={`pointer-events-none px-2 py-0.5 rounded border backdrop-blur-md transition-all font-mono select-none ${
           isSelected
-            ? 'bg-green-900/90 border-green-500 text-green-100 scale-110 z-50 shadow-[0_0_15px_rgba(74,222,128,0.5)]'
-            : 'bg-black/60 border-blue-500/30 text-gray-300 hover:text-white hover:bg-black/80'
+            ? 'bg-green-900/80 border-green-500 text-green-100 scale-110 z-50'
+            : 'bg-black/50 border-blue-500/20 text-gray-400 text-[8px]'
         }`}>
-          <div className="text-[10px] font-bold uppercase tracking-widest flex flex-col items-center">
-            {country.flag} {country.name_fr || country.name}
-          </div>
+          <span className="whitespace-nowrap font-bold uppercase tracking-widest">
+            {country.name_fr || country.name}
+          </span>
         </div>
       </Html>
     </group>
@@ -97,74 +115,49 @@ const CountryMarker = ({ country, isSelected, onClick }: any) => {
 
 // --- SCÈNE PRINCIPALE ---
 export const WorldMap: React.FC = () => {
-  const { countries, selectCountry, selectedCountry } = useGameStore();
-
   return (
     <div className="w-full h-full bg-[#050a14] relative">
       <Canvas
-        camera={{ position: [0, 0, 14], fov: 40 }} // Caméra reculée pour vue stratégique
+        camera={{ position: [0, 0, 14], fov: 45 }}
         gl={{ antialias: false, powerPreference: "high-performance" }}
-        dpr={[1, 1.5]} // Optimisation performance
+        dpr={[1, 2]}
         shadows
       >
-        {/* Suspense gère le chargement des textures (écran blanc évité) */}
         <Suspense fallback={null}>
+          <ambientLight intensity={0.2} color="#ffffff" />
+          <directionalLight position={[15, 10, 5]} intensity={2} color="#fff0dd" />
+          <pointLight position={[-10, -5, -5]} intensity={5} color="#0044ff" distance={20} />
 
-          {/* ÉCLAIRAGE STRATÉGIQUE */}
-          <ambientLight intensity={0.4} color="#ccccff" /> {/* Lumière bleue froide */}
-          <directionalLight
-            position={[15, 10, 5]}
-            intensity={2.5}
-            color="#fff5e6" // Soleil chaud
-            castShadow
-          />
-          <pointLight position={[-10, -10, -5]} intensity={1} color="#0044ff" /> {/* Contre-jour bleu */}
+          <Stars radius={300} depth={50} count={5000} factor={4} saturation={0} fade />
 
-          <Stars radius={200} depth={50} count={3000} factor={4} saturation={0} fade speed={0.5} />
-
-          <Earth />
-
-          {countries.map((country) => (
-            <CountryMarker
-              key={country.id}
-              country={country}
-              isSelected={selectedCountry === country.id}
-              onClick={(e: any) => {
-                e.stopPropagation();
-                selectCountry(country.id);
-              }}
-            />
-          ))}
+          <EarthGroup />
 
           <OrbitControls
             enablePan={false}
-            minDistance={6.5}
+            minDistance={6}
             maxDistance={25}
-            rotateSpeed={0.6}
+            rotateSpeed={0.5}
             zoomSpeed={0.8}
-            dampingFactor={0.05} // Mouvement fluide "Lourd"
-            enableDamping={true}
+            dampingFactor={0.1}
+            enableDamping
           />
 
-          {/* POST-PROCESSING (L'effet "Next-Gen") */}
           <EffectComposer disableNormalPass>
-            {/* Bloom modéré pour faire briller les UI et l'atmosphère */}
-            <Bloom luminanceThreshold={0.6} mipmapBlur intensity={1.2} radius={0.5} />
-            {/* Grain léger pour aspect "Image Satellite en direct" */}
-            <Noise opacity={0.08} />
-            {/* Vignette pour focus central */}
-            <Vignette eskil={false} offset={0.1} darkness={1.0} />
+            <Bloom luminanceThreshold={0.5} mipmapBlur intensity={1.5} radius={0.4} />
+            <Noise opacity={0.05} />
+            <Vignette eskil={false} offset={0.1} darkness={1.1} />
           </EffectComposer>
-
         </Suspense>
       </Canvas>
 
-      {/* Loader UI (s'affiche pendant le téléchargement des textures) */}
-      <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-        <div className="text-blue-500/50 text-xs font-mono animate-pulse tracking-[0.5em]">
-          INITIALISATION SATELLITE...
-        </div>
-      </div>
+      {/* LE VRAI LOADER QUI DISPARAIT TOUT SEUL */}
+      <Loader
+        containerStyles={{ background: '#050a14' }}
+        innerStyles={{ background: '#1e293b', width: '200px', height: '10px' }}
+        barStyles={{ background: '#3b82f6', height: '10px' }}
+        dataStyles={{ display: 'none' }} // Cache le pourcentage moche
+        dataInterpolation={() => "INITIALISATION DU SYSTÈME SATELLITE..."}
+      />
     </div>
   );
 };
