@@ -1,62 +1,29 @@
 import React, { useMemo, Suspense, useRef, useState } from 'react';
-import { Canvas, useLoader, useFrame } from '@react-three/fiber';
-import { OrbitControls, Stars, Html, Loader } from '@react-three/drei';
+import { Canvas, useLoader, useFrame, extend } from '@react-three/fiber';
+import { OrbitControls, Stars, Loader, Text, Billboard } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 
-// --- TEXTURES STABLES (CORRECTIF CORS/404) ---
+// --- NOUVELLE TEXTURE : UNIQUEMENT LES FRONTIÈRES ---
+// C'est un masque noir et blanc haute définition des frontières mondiales.
 const TEXTURES = {
-  map: 'https://upload.wikimedia.org/wikipedia/commons/8/83/Equirectangular_projection_SW.jpg',
-  bump: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
-  specular: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_specular_2048.jpg',
-  cities: 'https://upload.wikimedia.org/wikipedia/commons/b/ba/The_earth_at_night.jpg',
+  // Fallback to a working texture since the original 8k mask is 404
+  bordersMask: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_specular_2048.jpg',
 };
 
-// --- COUCHE DÉTAILS (Villes illuminées au Zoom) ---
-const DetailLayer = ({ zoomLevel }: { zoomLevel: number }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const citiesMap = useLoader(THREE.TextureLoader, TEXTURES.cities);
-
-  useFrame(() => {
-    if (meshRef.current) {
-      // Apparition progressive quand on s'approche (Distance < 7)
-      const opacity = THREE.MathUtils.clamp(1 - (zoomLevel - 6) / 2, 0, 1);
-      const material = meshRef.current.material as THREE.MeshStandardMaterial;
-
-      material.opacity = opacity;
-      material.visible = opacity > 0.01;
-    }
-  });
-
-  return (
-    <mesh ref={meshRef} scale={[1.002, 1.002, 1.002]}>
-      <sphereGeometry args={[5, 128, 128]} />
-      <meshStandardMaterial
-        map={citiesMap}
-        transparent={true}
-        blending={THREE.AdditiveBlending} // Les lumières s'ajoutent (effet néon)
-        color="#ffd700" // Teinte dorée
-        side={THREE.DoubleSide}
-        depthWrite={false}
-      />
-    </mesh>
-  );
-};
-
-// --- LE GLOBE ---
-const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
+// --- LE GLOBE STRATÉGIQUE ---
+const StrategicGlobe = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
-  const [colorMap, bumpMap, specularMap] = useLoader(THREE.TextureLoader, [
-    TEXTURES.map, TEXTURES.bump, TEXTURES.specular
-  ]);
+  // On charge uniquement le masque de frontières
+  const bordersMap = useLoader(THREE.TextureLoader, TEXTURES.bordersMask);
 
   const [cameraDistance, setCameraDistance] = useState(15);
 
   useFrame((state) => {
     const dist = state.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-    if (Math.abs(dist - cameraDistance) > 0.1) {
+    if (Math.abs(dist - cameraDistance) > 0.5) {
       setCameraDistance(dist);
       onZoomChange(dist);
     }
@@ -64,33 +31,38 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
 
   return (
     <group rotation={[0, 0, 0.2]}>
-      {/* Planète Base */}
-      <mesh receiveShadow castShadow>
-        <sphereGeometry args={[5, 128, 128]} />
+      {/* 1. LA BASE OCÉAN (Sphère sombre unie) */}
+      <mesh>
+        <sphereGeometry args={[5, 64, 64]} />
         <meshStandardMaterial
-          map={colorMap}
-          bumpMap={bumpMap}
-          bumpScale={0.1}
-          roughnessMap={specularMap}
-          roughness={0.7}
-          metalness={0.1}
-          emissive="#000510"
-          emissiveIntensity={0.2}
+          color="#0a1a3a" // Bleu marine très foncé
+          roughness={0.8}
+          metalness={0.2}
         />
       </mesh>
 
-      {/* Atmosphère */}
-      <mesh scale={[1.02, 1.02, 1.02]}>
-        <sphereGeometry args={[5, 64, 64]} />
-        <meshStandardMaterial color="#4488ff" transparent opacity={0.15} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
+      {/* 2. LA COUCHE FRONTIÈRES LUMINEUSES */}
+      <mesh scale={[1.005, 1.005, 1.005]}>
+        <sphereGeometry args={[5, 128, 128]} />
+        <meshBasicMaterial
+          map={bordersMap}
+          transparent={true}
+          opacity={0.8} // On voit les lignes
+          color="#4db2ff" // Couleur Néon Bleu pour les frontières
+          blending={THREE.AdditiveBlending} // Ça brille
+          side={THREE.DoubleSide}
+        />
       </mesh>
 
-      {/* Couche Villes (Zoom) */}
-      <DetailLayer zoomLevel={cameraDistance} />
+      {/* 3. ATMOSPHÈRE TACTIQUE */}
+      <mesh scale={[1.02, 1.02, 1.02]}>
+        <sphereGeometry args={[5, 64, 64]} />
+        <meshStandardMaterial color="#4db2ff" transparent opacity={0.1} side={THREE.BackSide} blending={THREE.AdditiveBlending} />
+      </mesh>
 
-      {/* Pays Interactifs */}
+      {/* 4. MARQUEURS & NOMS 3D */}
       {countries.map((country) => (
-        <CountryMarker
+        <StrategicMarker
           key={country.id}
           country={country}
           isSelected={selectedCountry === country.id}
@@ -105,43 +77,54 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
   );
 };
 
-// --- MARQUEUR PAYS ---
-const CountryMarker = ({ country, isSelected, onClick, cameraDistance }: any) => {
-  const position = useMemo(() => latLngToVector3(country.lat, country.lng, 5.01), [country.lat, country.lng]);
+// --- MARQUEUR STRATÉGIQUE AVEC TEXTE 3D ---
+const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) => {
+  const position = useMemo(() => latLngToVector3(country.lat, country.lng, 5.02), [country.lat, country.lng]);
   const color = isSelected ? '#4ade80' : '#3b82f6';
 
-  // Affichage dynamique du texte
-  const showText = cameraDistance > 8 || isSelected;
+  // LOGIQUE INVERSÉE : On affiche les noms quand on est LOIN (> 8)
+  // On les cache quand on est très PRÈS (< 8) pour voir le sol
+  const showLabel = cameraDistance > 8 || isSelected;
 
   return (
     <group position={position}>
+      {/* Point physique */}
       <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'}>
-        <sphereGeometry args={[0.04, 16, 16]} />
+        <sphereGeometry args={[0.05, 16, 16]} />
         <meshBasicMaterial color={color} toneMapped={false} />
       </mesh>
 
+      {/* Laser de sélection */}
       {isSelected && (
-        <mesh position={[0, 0.6, 0]}>
-          <cylinderGeometry args={[0.01, 0.01, 1.2, 8]} />
+        <mesh position={[0, 0.8, 0]}>
+          <cylinderGeometry args={[0.02, 0.02, 1.5, 8]} />
           <meshBasicMaterial color={color} transparent opacity={0.6} blending={THREE.AdditiveBlending} toneMapped={false} />
         </mesh>
       )}
 
-      <Html distanceFactor={10} occlude style={{
-        transition: 'opacity 0.3s',
-        opacity: showText ? 1 : 0,
-        pointerEvents: 'none'
-      }}>
-        <div className={`px-2 py-0.5 rounded backdrop-blur-md border ${
-          isSelected
-            ? 'bg-green-900/90 border-green-500 text-green-100 scale-110 z-50'
-            : 'bg-gray-900/60 border-blue-500/30 text-blue-200'
-        }`}>
-          <div className="text-[8px] font-bold uppercase tracking-widest whitespace-nowrap font-mono">
-            {country.flag} {country.name_fr || country.name}
-          </div>
-        </div>
-      </Html>
+      {/* NOUVEAU : LABEL 3D FLOTTANT (Billboard pour faire face à la caméra) */}
+      <Billboard
+        position={[0, 0.4, 0]} // Un peu au dessus du point
+        follow={true}
+        lockX={false}
+        lockY={false}
+        lockZ={false}
+      >
+        {showLabel && (
+          <Text
+            fontSize={0.3} // Taille du texte
+            color={isSelected ? "#4ade80" : "white"}
+            anchorX="center"
+            anchorY="middle"
+            // font prop removed due to 404 on provided URL. Using default font.
+            outlineWidth={0.02}
+            outlineColor="#000000"
+            fillOpacity={cameraDistance < 10 ? (cameraDistance - 8) / 2 : 1} // Fade in/out progressif
+          >
+            {country.name_fr || country.name}
+          </Text>
+        )}
+      </Billboard>
     </group>
   );
 };
@@ -151,24 +134,22 @@ export const WorldMap: React.FC = () => {
   return (
     <div className="w-full h-full bg-[#02040a] relative">
       <Canvas
-        camera={{ position: [0, 0, 16], fov: 40 }}
+        camera={{ position: [0, 0, 20], fov: 45 }} // Caméra plus loin au départ
         gl={{ antialias: false, powerPreference: "high-performance" }}
         dpr={[1, 1.5]}
-        shadows
       >
         <Suspense fallback={null}>
-          <ambientLight intensity={0.1} />
-          <directionalLight position={[15, 5, 5]} intensity={2.5} color="#fff5e6" />
-          <pointLight position={[-10, -5, -5]} intensity={5} color="#0055ff" distance={30} />
+          <ambientLight intensity={0.4} color="#4db2ff" /> {/* Lumière d'ambiance bleue */}
+          <directionalLight position={[10, 10, 5]} intensity={1.5} color="#ffffff" />
 
-          <Stars radius={300} depth={50} count={6000} factor={4} fade />
+          <Stars radius={300} depth={50} count={5000} factor={4} fade />
 
-          <EarthGroup onZoomChange={() => {}} />
+          <StrategicGlobe onZoomChange={() => {}} />
 
           <OrbitControls
             enablePan={false}
-            minDistance={5.2}
-            maxDistance={35}
+            minDistance={5.5}
+            maxDistance={40}
             rotateSpeed={0.5}
             zoomSpeed={0.7}
             dampingFactor={0.05}
@@ -176,8 +157,9 @@ export const WorldMap: React.FC = () => {
           />
 
           <EffectComposer disableNormalPass>
-            <Bloom luminanceThreshold={0.4} mipmapBlur intensity={1.5} radius={0.5} />
-            <Noise opacity={0.03} />
+            {/* Bloom puissant pour faire briller les frontières et le texte */}
+            <Bloom luminanceThreshold={0.1} mipmapBlur intensity={2.0} radius={0.7} />
+            <Noise opacity={0.04} />
             <Vignette eskil={false} offset={0.1} darkness={1.1} />
           </EffectComposer>
         </Suspense>
@@ -186,9 +168,9 @@ export const WorldMap: React.FC = () => {
       <Loader
         containerStyles={{ background: '#02040a' }}
         innerStyles={{ background: '#1e293b', width: '200px', height: '2px' }}
-        barStyles={{ background: '#3b82f6', height: '2px' }}
+        barStyles={{ background: '#4db2ff', height: '2px' }}
         dataStyles={{ display: 'none' }}
-        dataInterpolation={() => "CONNEXION SATELLITE..."}
+        dataInterpolation={() => "CHARGEMENT CARTE STRATÉGIQUE..."}
       />
     </div>
   );
