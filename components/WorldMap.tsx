@@ -8,17 +8,18 @@ import { latLngToVector3 } from '../utils/geo';
 
 // --- TEXTURES CONFIG ---
 const TEXTURES = {
-  // Texture sombre avec bathymétrie (profondeur océans) pour le look "Stratégique"
-  baseMap: 'https://upload.wikimedia.org/wikipedia/commons/1/1c/Blue_Marble_Next_Generation_%2B_topography_%2B_bathymetry.jpg',
+  // Texture de base (Terre sans nuages trop marqués, propre)
+  // Source : Three.js GitHub Repo (Ultra stable)
+  baseMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg',
 
-  // Relief très marqué
-  normalMap: 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/Earth_normal_map_8k.jpg/2048px-Earth_normal_map_8k.jpg',
+  // Relief (Normal Map) - 2K
+  normalMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
 
-  // Masque pour que l'eau brille (effet carte plastifiée) et la terre soit mate
-  specularMap: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Earth_specular_map.png/2048px-Earth_specular_map.png',
+  // Reflets (Specular Map) - 2K
+  specularMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_specular_2048.jpg',
 
-  // Couche frontières (On garde la tienne ou on prend une version plus fine/blanche)
-  politicalLayer: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/World_map_-_low_resolution.svg/2560px-World_map_-_low_resolution.svg.png'
+  // Couche Politique (Celle-ci marchait, on la garde, mais en version sécurisée)
+  politicalLayer: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/World_map_-_low_resolution.svg/1024px-World_map_-_low_resolution.svg.png'
 };
 
 // --- COUCHE POLITIQUE (Visible uniquement au ZOOM) ---
@@ -80,15 +81,14 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
         <meshStandardMaterial
           map={baseMap}
           normalMap={normalMap}
-          roughnessMap={specularMap} // Utilise le masque d'eau pour la rugosité
+          roughnessMap={specularMap}
 
-          // SETTINGS HOI4 :
-          color="#b0b0b0"            // On assombrit la texture de base (gris) pour faire "sérieux"
-          normalScale={new THREE.Vector2(2, 2)} // On force le relief à fond (X4 par rapport à avant)
-          roughness={0.8}            // Base assez mate
-          metalness={0.2}            // Légère touche métallique pour l'aspect "Table de jeu"
-          emissive="#001133"         // Légère émission bleu nuit dans les ombres pour éviter le noir total
-          emissiveIntensity={0.1}
+          // REGLAGES SOMBRES "HOI4" :
+          color="#808080"            // On assombrit la texture de base (Gris moyen)
+          roughness={0.7}            // Terre assez mate
+          metalness={0.1}            // Léger reflet métallique
+          normalScale={new THREE.Vector2(1.5, 1.5)} // Relief bien visible
+          emissive="#000510"         // Très légère teinte bleu nuit dans le noir complet
         />
       </mesh>
 
