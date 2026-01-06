@@ -1,67 +1,30 @@
 import React, { useMemo, Suspense, useRef, useState } from 'react';
-import { Canvas, useLoader, useFrame } from '@react-three/fiber';
+import { Canvas, useLoader, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars, Html, Loader, Billboard, Text } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 
-// --- TEXTURES CONFIG ---
-const TEXTURES = {
-  // Texture de base (Terre sans nuages trop marqués, propre)
-  // Source : Three.js GitHub Repo (Ultra stable)
-  baseMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg',
-
-  // Relief (Normal Map) - 2K
-  normalMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
-
-  // Reflets (Specular Map) - 2K
-  specularMap: 'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_specular_2048.jpg',
-
-  // Couche Politique (Celle-ci marchait, on la garde, mais en version sécurisée)
-  politicalLayer: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/World_map_-_low_resolution.svg/1024px-World_map_-_low_resolution.svg.png'
-};
-
-// --- COUCHE POLITIQUE (Visible uniquement au ZOOM) ---
-const PoliticalLayer = ({ zoomLevel }: { zoomLevel: number }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const politicalMap = useLoader(THREE.TextureLoader, TEXTURES.politicalLayer);
-
-  useFrame(() => {
-    if (meshRef.current) {
-      // LOGIQUE : Invisible de loin (> 10), Apparaît progressivement quand on zoom (< 8)
-      const opacity = THREE.MathUtils.clamp(1 - (zoomLevel - 6) / 3, 0, 0.9);
-
-      const material = meshRef.current.material as THREE.MeshStandardMaterial;
-      material.opacity = opacity;
-      material.visible = opacity > 0.01;
-    }
-  });
-
-  return (
-    <mesh ref={meshRef} scale={[1.002, 1.002, 1.002]}> {/* Juste au dessus de la texture de base */}
-      <sphereGeometry args={[5, 128, 128]} />
-      <meshStandardMaterial
-        map={politicalMap}
-        transparent={true}
-        blending={THREE.NormalBlending} // Se superpose normalement
-        roughness={1}
-        metalness={0}
-      />
-    </mesh>
-  );
-};
-
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
+  const gl = useThree((state) => state.gl);
 
-  // Chargement des 3 textures critiques
-  const [baseMap, normalMap, specularMap] = useLoader(THREE.TextureLoader, [
-    TEXTURES.baseMap,
-    TEXTURES.normalMap,
-    TEXTURES.specularMap
-  ]);
+  const [baseMap, normalMap] = useLoader(THREE.TextureLoader, [
+    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg',
+    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg'
+  ], (loader) => loader.setCrossOrigin('anonymous'));
+
+  // OPTIMISATION NETTETÉ (ANISOTROPY)
+  useMemo(() => {
+    const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
+    baseMap.anisotropy = maxAnisotropy;
+    normalMap.anisotropy = maxAnisotropy;
+
+    baseMap.minFilter = THREE.LinearMipMapLinearFilter;
+    normalMap.minFilter = THREE.LinearMipMapLinearFilter;
+  }, [baseMap, normalMap, gl]);
 
   const [cameraDistance, setCameraDistance] = useState(15);
 
@@ -75,39 +38,32 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
 
   return (
     <group rotation={[0, 0, 0.2]}>
-      {/* 1. PLANÈTE BASE STYLE "WAR ROOM" */}
+      {/* 1. LA TERRE (MATTE, PAS DE FLASHS) */}
       <mesh receiveShadow castShadow>
-        <sphereGeometry args={[5, 128, 128]} /> {/* Augmenté à 128 segments pour que les montagnes soient propres */}
+        <sphereGeometry args={[5, 128, 128]} />
         <meshStandardMaterial
           map={baseMap}
           normalMap={normalMap}
-          roughnessMap={specularMap}
-
-          // REGLAGES SOMBRES "HOI4" :
-          color="#808080"            // On assombrit la texture de base (Gris moyen)
-          roughness={0.7}            // Terre assez mate
-          metalness={0.1}            // Léger reflet métallique
-          normalScale={new THREE.Vector2(1.5, 1.5)} // Relief bien visible
-          emissive="#000510"         // Très légère teinte bleu nuit dans le noir complet
+          // PAS DE SPECULAR MAP -> Bye bye les flashs
+          color="#cccccc"            // Gris clair pour éclaircir la base
+          roughness={0.9}            // 0.9 = Aspect "Papier/Carte", très mat, pas de reflet d'eau
+          metalness={0.0}            // 0 = Pas de métal, évite les reflets bizarres
+          normalScale={new THREE.Vector2(3, 3)} // Relief très fort pour voir les montagnes
         />
       </mesh>
 
-      {/* 2. ATMOSPHÈRE (On la rend plus subtile, moins "Espace", plus "Hologramme") */}
-      <mesh scale={[1.01, 1.01, 1.01]}>
-        <sphereGeometry args={[5, 64, 64]} />
-        <meshStandardMaterial
-            color="#2a4c80"
-            transparent
-            opacity={0.05}
-            side={THREE.BackSide}
-            blending={THREE.AdditiveBlending}
-        />
+      {/* 2. GRID / FRONTIÈRES TACTIQUES (Wireframe Fallback) */}
+      <mesh scale={[1.001, 1.001, 1.001]}>
+         <sphereGeometry args={[5, 48, 48]} />
+         <meshBasicMaterial
+            color="#ffffff"
+            wireframe={true}
+            transparent={true}
+            opacity={cameraDistance < 8 ? 0.08 : 0} // Subtle grid when close
+         />
       </mesh>
 
-      {/* 3. COUCHE POLITIQUE (Reste inchangée mais s'affichera mieux sur le fond sombre) */}
-      <PoliticalLayer zoomLevel={cameraDistance} />
-
-      {/* ... Markers ... */}
+      {/* MARQUEURS STRATÉGIQUES */}
       {Array.isArray(countries) && countries.map((country) => (
         <StrategicMarker
           key={country.id}
@@ -184,14 +140,14 @@ export const WorldMap: React.FC = () => {
         shadows
       >
         <Suspense fallback={null}>
-          <ambientLight intensity={0.2} /> {/* Ambiance très faible pour garder le contraste */}
+          <ambientLight intensity={1.5} color="#b0c4de" />
           <directionalLight
-              position={[50, 20, 30]} // Lumière venant de côté/haut
-              intensity={2.5}         // Très forte pour créer des ombres nettes sur les montagnes
-              color="#ffeedd"         // Lumière légèrement chaude (lampe de bureau)
+              position={[15, 5, 5]}
+              intensity={1.5}
+              color="#fff"
               castShadow
           />
-          <pointLight position={[-10, -10, -10]} intensity={1} color="#002266" /> {/* Contre-jour bleu nuit (Fill light) */}
+          <pointLight position={[-20, 0, -20]} intensity={0.5} color="#404040" />
 
           <Stars radius={300} depth={50} count={3000} factor={4} fade />
 
