@@ -1,6 +1,6 @@
 import React, { useMemo, Suspense, useRef, useState } from 'react';
-import { Canvas, useLoader, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Stars, Html, Loader, Billboard, Text } from '@react-three/drei';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { Stars, Loader, Billboard, Text } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
@@ -8,35 +8,48 @@ import { latLngToVector3 } from '../utils/geo';
 import { VectorBorders } from './VectorBorders';
 import { CityMeshes } from './CityMeshes';
 import { VegetationSystem } from './VegetationSystem';
-import { useLOD } from '../hooks/useLOD';
-import { ProceduralTerrain } from './ProceduralTerrain';
 import { RoadNetwork } from './RoadNetwork';
 import { PoliticalOverlay } from './PoliticalOverlay';
 import { CameraController } from './CameraController';
+import { EarthTerrain } from './EarthTerrain';
+import { LODTransitionManager } from '../systems/LODTransitionManager';
+import { TERRAIN_LOD_CONFIG } from '../systems/TerrainLODManager';
 
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
-
-  const { currentLOD, features, updateLOD } = useLOD(15);
+  const lodManager = useRef(new LODTransitionManager());
+  const [currentLOD, setCurrentLOD] = useState<string>('GLOBE');
   const [cameraDistance, setCameraDistance] = useState(15);
 
   useFrame((state) => {
-    const dist = state.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-    if (Math.abs(dist - cameraDistance) > 0.1) {
+    // Note: using position.length() because CameraController logic relies on distance to center (0,0,0)
+    const dist = state.camera.position.length();
+
+    // Update distance state if significant change to avoid re-renders
+    if (Math.abs(dist - cameraDistance) > 0.05) {
       setCameraDistance(dist);
-      updateLOD(dist);
+
+      // Check for LOD transition
+      if (lodManager.current.checkTransition(dist)) {
+         // Update React state
+         setCurrentLOD(lodManager.current.getCurrentLOD());
+      }
+
       onZoomChange(dist);
     }
   });
 
+  const features = useMemo(() => {
+     return TERRAIN_LOD_CONFIG[currentLOD]?.features || TERRAIN_LOD_CONFIG['GLOBE'].features;
+  }, [currentLOD]);
+
   return (
     <group rotation={[0, 0, 0.2]}>
-      {/* 1. LA TERRE (Terrain System avec Shader LOD) */}
-      <ProceduralTerrain
+      {/* 1. LA TERRE (Nouveau Terrain System) */}
+      <EarthTerrain
         lodLevel={currentLOD}
         cameraDistance={cameraDistance}
-        politicalBlend={features.showPoliticalOverlay ? 1.0 : 0.0}
       />
 
       {/* 2. ATMOSPHÈRE (Légère) */}
@@ -58,10 +71,10 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
       {features.showPoliticalOverlay && <PoliticalOverlay lodLevel={currentLOD} />}
 
       {/* 7. FRONTIÈRES (VectorBorders) */}
-      <VectorBorders radius={5} lodLevel={currentLOD} />
+      <VectorBorders radius={5.01} lodLevel={currentLOD} />
 
       {/* MARQUEURS STRATÉGIQUES */}
-      {Array.isArray(countries) && countries.map((country) => (
+      {features.showCities && Array.isArray(countries) && countries.map((country) => (
         <StrategicMarker
           key={country.id}
           country={country}
@@ -157,7 +170,6 @@ export const WorldMap: React.FC = () => {
             {/* Moins de noise pour voir les détails en zoom */}
             <Noise opacity={0.01} />
             <Vignette eskil={false} offset={0.1} darkness={1.1} />
-            {/* Note: SSAO et DOF sont trop gourmands pour l'instant sans optimisation, on reste sur du simple */}
           </EffectComposer>
         </Suspense>
       </Canvas>

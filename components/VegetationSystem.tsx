@@ -2,63 +2,102 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
-import { LODLevel } from '../systems/LODManager';
 
-// Cone H=0.15. Bottom at -0.05.
-// Center Y = -0.05 + 0.15/2 = -0.05 + 0.075 = 0.025.
-const TREE_GEO = new THREE.ConeGeometry(0.015, 0.15, 5);
-TREE_GEO.translate(0, 0.025, 0);
-TREE_GEO.rotateX(Math.PI/2); // Point outwards
-
-const TREE_MAT = new THREE.MeshStandardMaterial({ color: '#166534', roughness: 0.9 });
+// Vegetation Types
+const VEGETATION_TYPES = {
+  TREE_DECIDUOUS: {
+    // Cone: Default is Y-up. We rotate it to Z-up? No, let's keep it consistent.
+    // If we want Z-up logic like buildings, we should rotate geometry.
+    // Standard Cone is height along Y.
+    // Let's RotateX(PI/2) -> height along Z.
+    geometry: new THREE.ConeGeometry(0.008, 0.025, 6).translate(0, 0.0125, 0).rotateX(Math.PI/2),
+    color: new THREE.Color('#228b22'),
+    count: 3000
+  },
+  TREE_CONIFER: {
+    geometry: new THREE.ConeGeometry(0.006, 0.03, 4).translate(0, 0.015, 0).rotateX(Math.PI/2),
+    color: new THREE.Color('#1e5128'),
+    count: 3000
+  },
+  BUSH: {
+    geometry: new THREE.SphereGeometry(0.005, 4, 4).translate(0, 0, 0.0025),
+    color: new THREE.Color('#4ade80'),
+    count: 2000
+  }
+};
 
 const DUMMY = new THREE.Object3D();
+const UP = new THREE.Vector3(0, 0, 1);
 
-export const VegetationSystem: React.FC<{ lodLevel: LODLevel }> = ({ lodLevel }) => {
+export const VegetationSystem = ({ lodLevel }: { lodLevel: string }) => {
   const { countries } = useGameStore();
 
-  const meshRef = useMemo(() => new THREE.InstancedMesh(TREE_GEO, TREE_MAT, 5000), []);
+  const meshes = {
+    TREE_DECIDUOUS: useMemo(() => new THREE.InstancedMesh(VEGETATION_TYPES.TREE_DECIDUOUS.geometry, new THREE.MeshStandardMaterial({color: VEGETATION_TYPES.TREE_DECIDUOUS.color}), VEGETATION_TYPES.TREE_DECIDUOUS.count), []),
+    TREE_CONIFER: useMemo(() => new THREE.InstancedMesh(VEGETATION_TYPES.TREE_CONIFER.geometry, new THREE.MeshStandardMaterial({color: VEGETATION_TYPES.TREE_CONIFER.color}), VEGETATION_TYPES.TREE_CONIFER.count), []),
+    BUSH: useMemo(() => new THREE.InstancedMesh(VEGETATION_TYPES.BUSH.geometry, new THREE.MeshStandardMaterial({color: VEGETATION_TYPES.BUSH.color}), VEGETATION_TYPES.BUSH.count), [])
+  };
 
   useMemo(() => {
-    if (lodLevel !== 'CITY_BUILDER') {
-        meshRef.count = 0;
-        return;
-    }
+     const counts = { TREE_DECIDUOUS: 0, TREE_CONIFER: 0, BUSH: 0 };
 
-    let idx = 0;
-    if (countries) {
+     if (countries && lodLevel === 'CITY') {
         countries.forEach(country => {
-            // Only spawn trees around cities for now (parks/suburbs)
-            if (country.cities) {
-                country.cities.forEach((city: any) => {
-                     // 10-20 trees per city
-                     const numTrees = 15;
-                     for(let i=0; i<numTrees; i++) {
-                         if (idx >= 5000) return;
+           if (!country.cities) return;
 
-                         // Place in a ring around the city (Suburbs)
-                         const angle = Math.random() * Math.PI * 2;
-                         const dist = 0.06 + Math.random() * 0.04; // Further out than buildings
+           country.cities.forEach((city: any) => {
+               // Generate vegetation ring AROUND the city (green belt)
+               // Radius from 0.03 to 0.08
+               const seed = Math.abs(city.lat * city.lng);
+               const numTrees = 50;
 
-                         const pos = latLngToVector3(city.lat + Math.sin(angle)*dist*20, city.lng + Math.cos(angle)*dist*20, 5);
+               for(let i=0; i<numTrees; i++) {
+                   const typeRand = (seed + i * 0.7) % 1.0;
+                   let type: keyof typeof meshes;
+                   if (typeRand > 0.6) type = 'TREE_DECIDUOUS';
+                   else if (typeRand > 0.3) type = 'TREE_CONIFER';
+                   else type = 'BUSH';
 
-                         DUMMY.position.copy(pos);
-                         DUMMY.lookAt(pos.clone().multiplyScalar(2));
+                   if (counts[type] >= meshes[type].count) continue;
 
-                         const scale = 0.5 + Math.random() * 1.0;
-                         // Scale affects Z (Height) too, so base height 0.15 * scale 0.5 = 0.075. Still tall enough.
-                         DUMMY.scale.set(scale, scale, scale);
-                         DUMMY.updateMatrix();
+                   const angle = (seed + i) * 5.0;
+                   const dist = 0.03 + ((seed * i) % 100)/100 * 0.04;
 
-                         meshRef.setMatrixAt(idx++, DUMMY.matrix);
-                     }
-                });
-            }
+                   const offLat = Math.sin(angle) * dist;
+                   const offLng = Math.cos(angle) * dist;
+
+                   // FIXED: Altitude 5.03 to clear terrain
+                   const pos = latLngToVector3(city.lat + offLat, city.lng + offLng, 5.03);
+
+                   DUMMY.position.copy(pos);
+                   // FIXED: Quaternion alignment
+                   DUMMY.quaternion.setFromUnitVectors(UP, pos.clone().normalize());
+
+                   const scale = 0.5 + Math.random() * 1.0;
+                   DUMMY.scale.set(scale, scale, scale);
+
+                   DUMMY.updateMatrix();
+                   meshes[type].setMatrixAt(counts[type]++, DUMMY.matrix);
+               }
+           });
         });
-    }
-    meshRef.count = idx;
-    meshRef.instanceMatrix.needsUpdate = true;
-  }, [countries, lodLevel, meshRef]);
+     }
 
-  return <primitive object={meshRef} />;
+     Object.keys(meshes).forEach(key => {
+         const k = key as keyof typeof meshes;
+         meshes[k].count = counts[k];
+         meshes[k].instanceMatrix.needsUpdate = true;
+     });
+
+  }, [countries, lodLevel]);
+
+  if (lodLevel !== 'CITY') return null;
+
+  return (
+    <group>
+       {Object.keys(meshes).map(key => (
+          <primitive key={key} object={meshes[key as keyof typeof meshes]} />
+       ))}
+    </group>
+  );
 };
