@@ -12,30 +12,23 @@ import TerrainSystem from './TerrainSystem';
 import { RoadNetwork } from './RoadNetwork';
 import { PoliticalOverlay } from './PoliticalOverlay';
 
-// --- CONFIGURATION ULTIME ---
 const CAM_CONFIG = {
-  // Distances de zoom
-  minDist: 5.1,   // Zoom max (Au ras des pâquerettes)
-  maxDist: 30,    // Dézoom max (Espace lointain)
+  // Altitude (Distance au centre de la Terre 0,0,0)
+  maxAltitude: 30,    // Loin dans l'espace
+  minAltitude: 5.2,   // Au ras du sol (Rayon Terre 5 + 0.2)
 
-  // Seuils de déclenchement des effets
-  globeLimit: 12, // Distance où on est en mode "Globe" pur
-  cityLimit: 6,   // Distance où on est en mode "Ville" complet
+  // Seuils de transition
+  globeLimit: 15,     // Altitude où on commence à "descendre"
+  cityLimit: 6,       // Altitude où on est en mode "Ville"
 
-  // Vitesse de rotation (Sensibilité)
-  fastSpeed: 0.6,
+  // Vitesse de rotation
+  fastSpeed: 0.5,
   slowSpeed: 0.05,
-
-  // Inclinaison (Tilt)
-  baseAngle: 0,   // Angle normal (regarde le sol)
-  tiltAngle: 1.2  // Angle max (regarde l'horizon/ciel) - En radians
 };
-
-const vec = new THREE.Vector3(); // Variable temporaire pour éviter le Garbage Collector
-const corePoint = new THREE.Vector3(0, 0, 0);
 
 const CameraController = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const controlsRef = useRef<any>(null);
+  const vec = new THREE.Vector3();
 
   useFrame((state) => {
     if (!controlsRef.current) return;
@@ -43,48 +36,45 @@ const CameraController = ({ onZoomChange }: { onZoomChange: (d: number) => void 
     const controls = controlsRef.current;
     const camera = state.camera;
 
-    // 1. Calculer la distance actuelle
-    const dist = camera.position.distanceTo(controls.target);
+    // 1. CALCUL DE L'ALTITUDE RÉELLE (Distance au centre du monde)
+    // C'est la seule valeur stable. On ne se base plus sur la distance à la cible.
+    const altitude = camera.position.length();
 
-    // 2. Calculer le facteur de progression "Atterrissage" (t)
-    // 0 = On est loin (Espace)
-    // 1 = On est proche (Sol)
-    const t = 1 - THREE.MathUtils.smoothstep(dist, CAM_CONFIG.cityLimit, CAM_CONFIG.globeLimit);
+    // 2. Facteur de transition (t)
+    // 0 = Espace
+    // 1 = Sol
+    // On inverse smoothstep car on va de haut (15) vers bas (6)
+    const t = 1 - THREE.MathUtils.smoothstep(CAM_CONFIG.cityLimit, CAM_CONFIG.globeLimit, altitude);
 
-    // --- A. GESTION DE LA CIBLE (LE SECRET DE L'EFFET) ---
-    // Calculer le point à la surface juste en dessous de la caméra
-    // On projette la position de la caméra sur la sphère (Rayon 5)
+    // 3. GESTION INTELLIGENTE DE LA CIBLE
+    const corePoint = new THREE.Vector3(0, 0, 0);
+    // Point à la surface juste sous la caméra
     const surfacePoint = vec.copy(camera.position).normalize().multiplyScalar(5);
 
-    // Si on zoome (t approche de 1), la cible glisse du Noyau vers la Surface
-    // Lerp (Linear Interpolation) entre (0,0,0) et le point de surface
-    // On multiplie t par 0.95 pour ne pas coller exactement à la surface (sinon bug de caméra)
-    controls.target.lerpVectors(corePoint, surfacePoint, t * 0.95);
+    // On déplace la cible progressivement
+    controls.target.lerpVectors(corePoint, surfacePoint, t);
 
-    // --- B. SENSIBILITÉ ADAPTATIVE ---
+    // 4. *** LE FIX CRITIQUE (DEBLOCAGE ZOOM) ***
+    // Quand on est loin (t=0), on veut s'arrêter à la surface (MinDist ~ 5.2 par rapport au centre)
+    // Quand on est près (t=1), la cible EST la surface, donc on veut pouvoir s'approcher très près (MinDist ~ 0.2)
+    controls.minDistance = THREE.MathUtils.lerp(5.2, 0.2, t);
+
+    // 5. Sensibilité & Tilt (Comme avant)
     controls.rotateSpeed = THREE.MathUtils.lerp(CAM_CONFIG.fastSpeed, CAM_CONFIG.slowSpeed, t);
+    controls.maxPolarAngle = THREE.MathUtils.lerp(Math.PI / 1.5, Math.PI / 1.9, t);
 
-    // --- C. AUTO-TILT (PENCHER LA CAMÉRA) ---
-    // Quand on est au sol (t=1), on veut pouvoir regarder l'horizon (PI/2)
-    // Quand on est loin (t=0), on veut regarder globalement (moins de liberté verticale)
-    controls.maxPolarAngle = THREE.MathUtils.lerp(Math.PI / 1.5, Math.PI / 1.8, t);
-
-    // Dynamic MinDistance Correction: Allow getting closer when targeted at surface
-    controls.minDistance = THREE.MathUtils.lerp(CAM_CONFIG.minDist, 1.0, t);
-
-    // --- D. MISE À JOUR ---
-    onZoomChange(dist);
-
-    // IMPORTANT : Il faut update les controls manuellement si on touche au target
+    // Mise à jour
+    onZoomChange(altitude);
     controls.update();
   });
 
   return (
     <OrbitControls
       ref={controlsRef}
-      enablePan={false} // Important : Le pan est géré automatiquement par notre logic de cible
-      minDistance={CAM_CONFIG.minDist}
-      maxDistance={CAM_CONFIG.maxDist}
+      enablePan={false}
+      // On met des valeurs larges ici, car le useFrame va les restreindre dynamiquement
+      minDistance={0.1}
+      maxDistance={CAM_CONFIG.maxAltitude}
       enableDamping={true}
       dampingFactor={0.05}
     />
