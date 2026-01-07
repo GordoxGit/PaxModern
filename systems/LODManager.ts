@@ -50,10 +50,10 @@ export const getLODFeatures = (lod: LODLevel): LODFeatures => {
                 showGlobeTexture: true,
                 showPoliticalOverlay: true,
                 showProvinces: false,
-                showRoads: false,
+                showRoads: false, // Updated: No roads at continental
                 showBuildings: false,
                 showVegetation: false,
-                showDetailedTerrain: false,
+                showDetailedTerrain: true, // Updated: Basic relief
                 borderStyle: 'detailed',
                 labelSize: 'medium'
             };
@@ -63,8 +63,8 @@ export const getLODFeatures = (lod: LODLevel): LODFeatures => {
                 showPoliticalOverlay: true,
                 showProvinces: true,
                 showRoads: true,
-                showBuildings: true,
-                showVegetation: false,
+                showBuildings: true, // Simple buildings
+                showVegetation: true, // Sparse
                 showDetailedTerrain: true,
                 borderStyle: 'detailed',
                 labelSize: 'small'
@@ -72,14 +72,14 @@ export const getLODFeatures = (lod: LODLevel): LODFeatures => {
         case 'CITY_BUILDER':
             return {
                 showGlobeTexture: false,
-                showPoliticalOverlay: false,
+                showPoliticalOverlay: false, // Hide political map to see terrain
                 showProvinces: true,
-                showRoads: true,
-                showBuildings: true,
-                showVegetation: true,
-                showDetailedTerrain: true,
+                showRoads: true, // All roads
+                showBuildings: true, // Detailed
+                showVegetation: true, // Full
+                showDetailedTerrain: true, // Ultra
                 borderStyle: 'hidden',
-                labelSize: 'hidden'
+                labelSize: 'hidden' // Replaced by street names or similar if needed
             };
     }
 };
