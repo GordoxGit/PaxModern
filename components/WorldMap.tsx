@@ -12,6 +12,62 @@ import TerrainSystem from './TerrainSystem';
 import { RoadNetwork } from './RoadNetwork';
 import { PoliticalOverlay } from './PoliticalOverlay';
 
+// --- CONFIGURATION DE LA SENSIBILITÉ ---
+const CAMERA_SETTINGS = {
+  minDist: 5.2,   // Zoom max (très près)
+  maxDist: 35,    // Zoom min (très loin)
+  minSpeed: 0.05, // Vitesse très lente (Précision chirurgicale)
+  maxSpeed: 0.5   // Vitesse rapide (Vue satellite)
+};
+
+// Composant Helper pour gérer la caméra (à mettre DANS le Canvas)
+const CameraController = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
+  const controlsRef = useRef<any>(null);
+
+  useFrame((state) => {
+    if (controlsRef.current) {
+      // 1. Récupérer la distance actuelle Caméra <-> Cible (0,0,0)
+      const distance = state.camera.position.distanceTo(controlsRef.current.target);
+
+      // 2. Calculer le facteur de progression (0 = très près, 1 = très loin)
+      // On clamp entre 0 et 1 pour éviter les bugs si on dépasse les limites
+      const t = THREE.MathUtils.clamp(
+        (distance - CAMERA_SETTINGS.minDist) / (CAMERA_SETTINGS.maxDist - CAMERA_SETTINGS.minDist),
+        0,
+        1
+      );
+
+      // 3. Interpolation de la vitesse (Lerp)
+      // Si t=0 (près) -> minSpeed | Si t=1 (loin) -> maxSpeed
+      const dynamicSpeed = THREE.MathUtils.lerp(
+        CAMERA_SETTINGS.minSpeed,
+        CAMERA_SETTINGS.maxSpeed,
+        t // On peut ajouter une courbe ici, ex: t * t pour une transition non-linéaire
+      );
+
+      // 4. Appliquer la nouvelle vitesse
+      controlsRef.current.rotateSpeed = dynamicSpeed;
+
+      // 5. Callback pour le LOD (votre logique existante pour les labels/frontières)
+      onZoomChange(distance);
+    }
+  });
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enablePan={false}
+      minDistance={CAMERA_SETTINGS.minDist}
+      maxDistance={CAMERA_SETTINGS.maxDist}
+      // rotateSpeed initial (sera écrasé par le useFrame instantanément)
+      rotateSpeed={0.5}
+      zoomSpeed={0.7}
+      dampingFactor={0.05}
+      enableDamping
+    />
+  );
+};
+
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
@@ -146,15 +202,7 @@ export const WorldMap: React.FC = () => {
 
           <EarthGroup onZoomChange={() => {}} />
 
-          <OrbitControls
-            enablePan={false}
-            minDistance={5.2}
-            maxDistance={35}
-            rotateSpeed={0.5}
-            zoomSpeed={0.7}
-            dampingFactor={0.05}
-            enableDamping
-          />
+          <CameraController onZoomChange={(d) => {}} />
 
           <EffectComposer disableNormalPass>
             <Bloom luminanceThreshold={0.5} mipmapBlur intensity={1.0} radius={0.5} />
