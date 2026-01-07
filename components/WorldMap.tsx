@@ -7,79 +7,12 @@ import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 import { VectorBorders } from './VectorBorders';
 import { CityMeshes } from './CityMeshes';
+import { VegetationSystem } from './VegetationSystem';
 import { useLOD } from '../hooks/useLOD';
-import TerrainSystem from './TerrainSystem';
+import { ProceduralTerrain } from './ProceduralTerrain';
 import { RoadNetwork } from './RoadNetwork';
 import { PoliticalOverlay } from './PoliticalOverlay';
-
-const CAM_CONFIG = {
-  // Altitude (Distance au centre de la Terre 0,0,0)
-  maxAltitude: 30,    // Loin dans l'espace
-  minAltitude: 5.2,   // Au ras du sol (Rayon Terre 5 + 0.2)
-
-  // Seuils de transition
-  globeLimit: 15,     // Altitude où on commence à "descendre"
-  cityLimit: 6,       // Altitude où on est en mode "Ville"
-
-  // Vitesse de rotation
-  fastSpeed: 0.5,
-  slowSpeed: 0.05,
-};
-
-const CameraController = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
-  const controlsRef = useRef<any>(null);
-  const vec = new THREE.Vector3();
-
-  useFrame((state) => {
-    if (!controlsRef.current) return;
-
-    const controls = controlsRef.current;
-    const camera = state.camera;
-
-    // 1. CALCUL DE L'ALTITUDE RÉELLE (Distance au centre du monde)
-    // C'est la seule valeur stable. On ne se base plus sur la distance à la cible.
-    const altitude = camera.position.length();
-
-    // 2. Facteur de transition (t)
-    // 0 = Espace
-    // 1 = Sol
-    // On inverse smoothstep car on va de haut (15) vers bas (6)
-    const t = 1 - THREE.MathUtils.smoothstep(CAM_CONFIG.cityLimit, CAM_CONFIG.globeLimit, altitude);
-
-    // 3. GESTION INTELLIGENTE DE LA CIBLE
-    const corePoint = new THREE.Vector3(0, 0, 0);
-    // Point à la surface juste sous la caméra
-    const surfacePoint = vec.copy(camera.position).normalize().multiplyScalar(5);
-
-    // On déplace la cible progressivement
-    controls.target.lerpVectors(corePoint, surfacePoint, t);
-
-    // 4. *** LE FIX CRITIQUE (DEBLOCAGE ZOOM) ***
-    // Quand on est loin (t=0), on veut s'arrêter à la surface (MinDist ~ 5.2 par rapport au centre)
-    // Quand on est près (t=1), la cible EST la surface, donc on veut pouvoir s'approcher très près (MinDist ~ 0.2)
-    controls.minDistance = THREE.MathUtils.lerp(5.2, 0.2, t);
-
-    // 5. Sensibilité & Tilt (Comme avant)
-    controls.rotateSpeed = THREE.MathUtils.lerp(CAM_CONFIG.fastSpeed, CAM_CONFIG.slowSpeed, t);
-    controls.maxPolarAngle = THREE.MathUtils.lerp(Math.PI / 1.5, Math.PI / 1.9, t);
-
-    // Mise à jour
-    onZoomChange(altitude);
-    controls.update();
-  });
-
-  return (
-    <OrbitControls
-      ref={controlsRef}
-      enablePan={false}
-      // On met des valeurs larges ici, car le useFrame va les restreindre dynamiquement
-      minDistance={0.1}
-      maxDistance={CAM_CONFIG.maxAltitude}
-      enableDamping={true}
-      dampingFactor={0.05}
-    />
-  );
-};
+import { CameraController } from './CameraController';
 
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
@@ -100,7 +33,7 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
   return (
     <group rotation={[0, 0, 0.2]}>
       {/* 1. LA TERRE (Terrain System avec Shader LOD) */}
-      <TerrainSystem
+      <ProceduralTerrain
         lodLevel={currentLOD}
         cameraDistance={cameraDistance}
         politicalBlend={features.showPoliticalOverlay ? 1.0 : 0.0}
@@ -115,15 +48,17 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
       {/* 3. VILLES EN 3D (Adaptées au LOD) */}
       {features.showBuildings && <CityMeshes lodLevel={currentLOD} />}
 
-      {/* 4. INFRASTRUCTURE */}
+      {/* 4. VÉGÉTATION (Seulement en CITY_MODE) */}
+      {features.showVegetation && <VegetationSystem lodLevel={currentLOD} />}
+
+      {/* 5. INFRASTRUCTURE */}
       {features.showRoads && <RoadNetwork lodLevel={currentLOD} />}
 
-      {/* 5. OVERLAY POLITIQUE */}
+      {/* 6. OVERLAY POLITIQUE */}
       {features.showPoliticalOverlay && <PoliticalOverlay lodLevel={currentLOD} />}
 
-      {/* 6. FRONTIÈRES (VectorBorders) */}
-      {/* Vérifie que tu n'as pas laissé de grille ici. Juste les lignes. */}
-      <VectorBorders radius={5} />
+      {/* 7. FRONTIÈRES (VectorBorders) */}
+      <VectorBorders radius={5} lodLevel={currentLOD} />
 
       {/* MARQUEURS STRATÉGIQUES */}
       {Array.isArray(countries) && countries.map((country) => (
@@ -219,8 +154,10 @@ export const WorldMap: React.FC = () => {
 
           <EffectComposer disableNormalPass>
             <Bloom luminanceThreshold={0.5} mipmapBlur intensity={1.0} radius={0.5} />
-            <Noise opacity={0.02} />
+            {/* Moins de noise pour voir les détails en zoom */}
+            <Noise opacity={0.01} />
             <Vignette eskil={false} offset={0.1} darkness={1.1} />
+            {/* Note: SSAO et DOF sont trop gourmands pour l'instant sans optimisation, on reste sur du simple */}
           </EffectComposer>
         </Suspense>
       </Canvas>
