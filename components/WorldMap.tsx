@@ -12,58 +12,81 @@ import TerrainSystem from './TerrainSystem';
 import { RoadNetwork } from './RoadNetwork';
 import { PoliticalOverlay } from './PoliticalOverlay';
 
-// --- CONFIGURATION DE LA SENSIBILITÉ ---
-const CAMERA_SETTINGS = {
-  minDist: 5.2,   // Zoom max (très près)
-  maxDist: 35,    // Zoom min (très loin)
-  minSpeed: 0.05, // Vitesse très lente (Précision chirurgicale)
-  maxSpeed: 0.5   // Vitesse rapide (Vue satellite)
+// --- CONFIGURATION ULTIME ---
+const CAM_CONFIG = {
+  // Distances de zoom
+  minDist: 5.1,   // Zoom max (Au ras des pâquerettes)
+  maxDist: 30,    // Dézoom max (Espace lointain)
+
+  // Seuils de déclenchement des effets
+  globeLimit: 12, // Distance où on est en mode "Globe" pur
+  cityLimit: 6,   // Distance où on est en mode "Ville" complet
+
+  // Vitesse de rotation (Sensibilité)
+  fastSpeed: 0.6,
+  slowSpeed: 0.05,
+
+  // Inclinaison (Tilt)
+  baseAngle: 0,   // Angle normal (regarde le sol)
+  tiltAngle: 1.2  // Angle max (regarde l'horizon/ciel) - En radians
 };
 
-// Composant Helper pour gérer la caméra (à mettre DANS le Canvas)
+const vec = new THREE.Vector3(); // Variable temporaire pour éviter le Garbage Collector
+const corePoint = new THREE.Vector3(0, 0, 0);
+
 const CameraController = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const controlsRef = useRef<any>(null);
 
   useFrame((state) => {
-    if (controlsRef.current) {
-      // 1. Récupérer la distance actuelle Caméra <-> Cible (0,0,0)
-      const distance = state.camera.position.distanceTo(controlsRef.current.target);
+    if (!controlsRef.current) return;
 
-      // 2. Calculer le facteur de progression (0 = très près, 1 = très loin)
-      // On clamp entre 0 et 1 pour éviter les bugs si on dépasse les limites
-      const t = THREE.MathUtils.clamp(
-        (distance - CAMERA_SETTINGS.minDist) / (CAMERA_SETTINGS.maxDist - CAMERA_SETTINGS.minDist),
-        0,
-        1
-      );
+    const controls = controlsRef.current;
+    const camera = state.camera;
 
-      // 3. Interpolation de la vitesse (Lerp)
-      // Si t=0 (près) -> minSpeed | Si t=1 (loin) -> maxSpeed
-      const dynamicSpeed = THREE.MathUtils.lerp(
-        CAMERA_SETTINGS.minSpeed,
-        CAMERA_SETTINGS.maxSpeed,
-        t // On peut ajouter une courbe ici, ex: t * t pour une transition non-linéaire
-      );
+    // 1. Calculer la distance actuelle
+    const dist = camera.position.distanceTo(controls.target);
 
-      // 4. Appliquer la nouvelle vitesse
-      controlsRef.current.rotateSpeed = dynamicSpeed;
+    // 2. Calculer le facteur de progression "Atterrissage" (t)
+    // 0 = On est loin (Espace)
+    // 1 = On est proche (Sol)
+    const t = 1 - THREE.MathUtils.smoothstep(dist, CAM_CONFIG.cityLimit, CAM_CONFIG.globeLimit);
 
-      // 5. Callback pour le LOD (votre logique existante pour les labels/frontières)
-      onZoomChange(distance);
-    }
+    // --- A. GESTION DE LA CIBLE (LE SECRET DE L'EFFET) ---
+    // Calculer le point à la surface juste en dessous de la caméra
+    // On projette la position de la caméra sur la sphère (Rayon 5)
+    const surfacePoint = vec.copy(camera.position).normalize().multiplyScalar(5);
+
+    // Si on zoome (t approche de 1), la cible glisse du Noyau vers la Surface
+    // Lerp (Linear Interpolation) entre (0,0,0) et le point de surface
+    // On multiplie t par 0.95 pour ne pas coller exactement à la surface (sinon bug de caméra)
+    controls.target.lerpVectors(corePoint, surfacePoint, t * 0.95);
+
+    // --- B. SENSIBILITÉ ADAPTATIVE ---
+    controls.rotateSpeed = THREE.MathUtils.lerp(CAM_CONFIG.fastSpeed, CAM_CONFIG.slowSpeed, t);
+
+    // --- C. AUTO-TILT (PENCHER LA CAMÉRA) ---
+    // Quand on est au sol (t=1), on veut pouvoir regarder l'horizon (PI/2)
+    // Quand on est loin (t=0), on veut regarder globalement (moins de liberté verticale)
+    controls.maxPolarAngle = THREE.MathUtils.lerp(Math.PI / 1.5, Math.PI / 1.8, t);
+
+    // Dynamic MinDistance Correction: Allow getting closer when targeted at surface
+    controls.minDistance = THREE.MathUtils.lerp(CAM_CONFIG.minDist, 1.0, t);
+
+    // --- D. MISE À JOUR ---
+    onZoomChange(dist);
+
+    // IMPORTANT : Il faut update les controls manuellement si on touche au target
+    controls.update();
   });
 
   return (
     <OrbitControls
       ref={controlsRef}
-      enablePan={false}
-      minDistance={CAMERA_SETTINGS.minDist}
-      maxDistance={CAMERA_SETTINGS.maxDist}
-      // rotateSpeed initial (sera écrasé par le useFrame instantanément)
-      rotateSpeed={0.5}
-      zoomSpeed={0.7}
+      enablePan={false} // Important : Le pan est géré automatiquement par notre logic de cible
+      minDistance={CAM_CONFIG.minDist}
+      maxDistance={CAM_CONFIG.maxDist}
+      enableDamping={true}
       dampingFactor={0.05}
-      enableDamping
     />
   );
 };
