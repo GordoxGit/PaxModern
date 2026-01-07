@@ -1,39 +1,52 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 
-// Configuration des modes de caméra
+// --- CONFIGURATION ---
+
+type CameraMode = 'GLOBE' | 'CONTINENTAL' | 'REGIONAL' | 'CITY_BUILDER';
+
 const CAMERA_MODES = {
   GLOBE: {
-    minAlt: 15,
-    maxAlt: Infinity,
-    rotateSpeed: 1.0,
-    zoomSpeed: 1.5,
+    rotateSpeed: 0.8,
+    zoomSpeed: 1.2,
     panSpeed: 0,
-    maxPolarAngle: Math.PI / 1.5, // ~120 deg
     enablePan: false,
-    fov: 45
+    maxPolarAngle: Math.PI * 0.85,
+    minPolarAngle: Math.PI * 0.15,
+    fov: 45,
+    minDistance: 1.0 // FIXED: Lowered to allow seamless transition
+  },
+  CONTINENTAL: {
+    rotateSpeed: 0.5,
+    zoomSpeed: 1.0,
+    panSpeed: 0.3,
+    enablePan: true,
+    maxPolarAngle: Math.PI * 0.85,
+    minPolarAngle: Math.PI * 0.15,
+    fov: 50,
+    minDistance: 1.0
   },
   REGIONAL: {
-    minAlt: 7,
-    maxAlt: 15,
-    rotateSpeed: 0.6,
-    zoomSpeed: 1.2,
-    panSpeed: 0.5,
-    maxPolarAngle: Math.PI * 0.75, // ~135 deg
-    enablePan: true,
-    fov: 50 // Transition value
-  },
-  CITY: {
-    minAlt: 0,
-    maxAlt: 7,
     rotateSpeed: 0.3,
     zoomSpeed: 0.8,
-    panSpeed: 1.0,
-    maxPolarAngle: Math.PI * 0.95, // ~170 deg - Horizon visible
+    panSpeed: 0.6,
     enablePan: true,
-    fov: 60
+    maxPolarAngle: Math.PI * 0.9,
+    minPolarAngle: Math.PI * 0.1,
+    fov: 55,
+    minDistance: 0.5
+  },
+  CITY_BUILDER: {
+    rotateSpeed: 0.2,
+    zoomSpeed: 0.5,
+    panSpeed: 1.0,
+    enablePan: true,
+    maxPolarAngle: Math.PI * 0.97, // Horizon view allowed
+    minPolarAngle: 0.1,
+    fov: 60,
+    minDistance: 0.5
   }
 };
 
@@ -44,95 +57,135 @@ interface CameraControllerProps {
 export const CameraController: React.FC<CameraControllerProps> = ({ onZoomChange }) => {
   const controlsRef = useRef<any>(null);
   const { camera } = useThree();
-  const vec = new THREE.Vector3();
-  const targetVec = new THREE.Vector3();
 
-  useFrame((state) => {
+  // State for mode management
+  const currentModeRef = useRef<CameraMode>('GLOBE');
+
+  // Transition management
+  const transitionRef = useRef({
+    active: false,
+    startTime: 0,
+    duration: 0.8, // seconds
+    startTarget: new THREE.Vector3(),
+    endTarget: new THREE.Vector3(),
+  });
+
+  // Calculate current mode based on distance
+  const getMode = (distance: number): CameraMode => {
+    if (distance > 12) return 'GLOBE';
+    if (distance > 6) return 'CONTINENTAL';
+    if (distance > 3) return 'REGIONAL';
+    return 'CITY_BUILDER';
+  };
+
+  useFrame((state, delta) => {
     if (!controlsRef.current) return;
-
     const controls = controlsRef.current;
 
-    // 1. Calcul de l'altitude réelle (distance au centre)
-    const altitude = camera.position.length();
+    // 1. Calculate real distance
+    const distanceToCenter = camera.position.length();
 
-    // 2. Détermination du mode et des facteurs d'interpolation
-    let currentMode = CAMERA_MODES.GLOBE;
-    let t = 0; // Facteur d'interpolation pour target (0 = centre, 1 = surface)
-
-    if (altitude > 15) {
-      currentMode = CAMERA_MODES.GLOBE;
-      t = 0;
-    } else if (altitude > 7) {
-      currentMode = CAMERA_MODES.REGIONAL;
-      // Interpolation entre 15 et 7
-      t = 1 - THREE.MathUtils.smoothstep(7, 15, altitude);
-    } else {
-      currentMode = CAMERA_MODES.CITY;
-      t = 1;
+    // Notify parent
+    if (onZoomChange) {
+      onZoomChange(distanceToCenter);
     }
 
-    // 3. Gestion de la cible (Target)
-    // Technique 1: Target mobile
-    // Distance > 15: target = (0,0,0)
-    // Distance < 7: target = point surface sous la caméra
-    // Entre les deux: interpolation
+    const newMode = getMode(distanceToCenter);
 
-    const corePoint = new THREE.Vector3(0, 0, 0);
-    // Point à la surface juste sous la caméra (rayon 5)
-    // On projette la position de la caméra sur la sphère de rayon 5
-    const surfacePoint = vec.copy(camera.position).normalize().multiplyScalar(5);
+    // 2. Handle Mode Transitions
+    if (newMode !== currentModeRef.current) {
+      // Trigger transition logic
+      const prevMode = currentModeRef.current;
+      currentModeRef.current = newMode;
 
-    // Smooth lerp de la target actuelle vers la target désirée pour éviter les sauts
-    const idealTarget = targetVec.copy(corePoint).lerp(surfacePoint, t);
+      // Handle Target Transition
+      // If going from GLOBE (Fixed target) to OTHERS (Pan enabled) -> Move target to surface
+      // If going from OTHERS to GLOBE -> Move target back to center
 
-    // On applique le changement de target progressivement (damping manuel)
-    controls.target.lerp(idealTarget, 0.1);
+      const isEnteringGlobe = newMode === 'GLOBE';
+      const isLeavingGlobe = prevMode === 'GLOBE';
 
-    // 4. Gestion du minDistance et Zoom
-    // Fix critique: permettre de zoomer très près en mode CITY
-    // Quand on est loin, on bloque à la surface (5.2)
-    // Quand on est près, on permet d'aller au sol (0.5 par rapport à la target qui est sur la surface)
-    // Attention: OrbitControls minDistance est relatif à la target
+      if (isEnteringGlobe || isLeavingGlobe) {
+        transitionRef.current.active = true;
+        transitionRef.current.startTime = state.clock.elapsedTime;
+        transitionRef.current.startTarget.copy(controls.target);
 
-    // Si target est (0,0,0), minDistance doit être ~5.5
-    // Si target est surface(5,y,z), minDistance doit être ~0.5
-
-    // Interpolation linéaire inverse de t
-    const globeMinDist = 5.5; // Un peu au dessus du sol
-    const cityMinDist = 0.5;  // Très près du sol
-
-    controls.minDistance = THREE.MathUtils.lerp(globeMinDist, cityMinDist, t);
-
-    // 5. Ajustement des paramètres dynamiques
-    controls.rotateSpeed = THREE.MathUtils.lerp(controls.rotateSpeed, currentMode.rotateSpeed, 0.1);
-    controls.zoomSpeed = currentMode.zoomSpeed;
-    controls.panSpeed = currentMode.panSpeed;
-    controls.enablePan = currentMode.enablePan;
-
-    // Max Polar Angle (Horizon view)
-    controls.maxPolarAngle = THREE.MathUtils.lerp(controls.maxPolarAngle, currentMode.maxPolarAngle, 0.05);
-
-    // 6. FOV Dynamique (Technique 3)
-    if (state.camera instanceof THREE.PerspectiveCamera) {
-       state.camera.fov = THREE.MathUtils.lerp(state.camera.fov, currentMode.fov, 0.05);
-       state.camera.updateProjectionMatrix();
+        if (isEnteringGlobe) {
+           transitionRef.current.endTarget.set(0, 0, 0);
+        } else {
+           // Leaving globe: Set target to the surface point directly under camera (or forward)
+           // Project camera vector to surface radius (approx 5)
+           const surfacePoint = camera.position.clone().normalize().multiplyScalar(5);
+           transitionRef.current.endTarget.copy(surfacePoint);
+        }
+      }
     }
+
+    // 3. Apply Transitions (Target)
+    if (transitionRef.current.active) {
+       const elapsed = state.clock.elapsedTime - transitionRef.current.startTime;
+       const progress = Math.min(elapsed / transitionRef.current.duration, 1.0);
+
+       // EaseInOutQuad
+       const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+       // Interpolate Target
+       controls.target.lerpVectors(
+         transitionRef.current.startTarget,
+         transitionRef.current.endTarget,
+         ease
+       );
+
+       // If finished
+       if (progress >= 1.0) {
+         transitionRef.current.active = false;
+         // Ensure exact end value
+         controls.target.copy(transitionRef.current.endTarget);
+       }
+    }
+
+    // 4. Apply Mode Parameters (Smoothly blend FOV)
+    const params = CAMERA_MODES[currentModeRef.current];
+
+    // Smoothly interpolate parameters to avoid jumps
+    controls.rotateSpeed = THREE.MathUtils.lerp(controls.rotateSpeed, params.rotateSpeed, 0.1);
+    controls.zoomSpeed = THREE.MathUtils.lerp(controls.zoomSpeed, params.zoomSpeed, 0.1);
+    controls.panSpeed = THREE.MathUtils.lerp(controls.panSpeed, params.panSpeed, 0.1);
+
+    // Set booleans directly
+    controls.enablePan = params.enablePan;
+
+    // Angles need smooth lerp too
+    controls.maxPolarAngle = THREE.MathUtils.lerp(controls.maxPolarAngle, params.maxPolarAngle, 0.05);
+    controls.minPolarAngle = THREE.MathUtils.lerp(controls.minPolarAngle, params.minPolarAngle, 0.05);
+
+    // FOV Animation
+    if (camera instanceof THREE.PerspectiveCamera) {
+      // Smoothly move FOV to target FOV
+      camera.fov = THREE.MathUtils.lerp(camera.fov, params.fov, 0.05);
+      camera.updateProjectionMatrix();
+    }
+
+    // 5. Dynamic MinDistance
+    // FIXED: Use a lower minDistance everywhere to allow seamless zoom.
+    // The previous logic clamped it to 12.1 in GLOBE mode which prevented zooming in.
+    // Now we just keep it low (0.5 or 1.0) and let the user fly.
+    // However, if we want to force "Globe View" to be far, we rely on the visual cues, not a hard clamp that traps them.
+    // We can gently nudge it, but 12.1 was too aggressive.
+
+    controls.minDistance = THREE.MathUtils.lerp(controls.minDistance, params.minDistance, 0.1);
 
     controls.update();
-
-    if (onZoomChange) {
-      onZoomChange(altitude);
-    }
   });
 
   return (
     <OrbitControls
       ref={controlsRef}
       enableDamping={true}
-      dampingFactor={0.12} // Plus réactif comme demandé
-      minDistance={1} // Sera écrasé par le useFrame
-      maxDistance={50}
-      enablePan={false} // Sera écrasé par le useFrame
+      dampingFactor={0.1}
+      maxDistance={80}
+      enablePan={false}
+      minDistance={1.0} // Start low to avoid initial trap
     />
   );
 };

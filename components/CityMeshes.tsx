@@ -2,133 +2,164 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
-import { LODLevel } from '../systems/LODManager';
 
-// Geometry constants to reuse
-// ADJUSTED: Taller and deeper geometries to penetrate terrain without floating or sinking
-// We aim for Bottom at -0.05 (Radius 4.95) and Top at >0.1 (Radius 5.1)
-// Terrain max height will be limited to ~0.04
-const GEOMETRIES = {
-  // Box H=0.15. Center Z offset to place bottom at -0.05.
-  // Center = -0.05 + 0.075 = 0.025.
-  RESIDENTIAL: new THREE.BoxGeometry(0.02, 0.02, 0.15).translate(0, 0, 0.025),
-
-  // Box H=0.2. Bottom -0.05. Center = -0.05 + 0.1 = 0.05.
-  COMMERCIAL: new THREE.BoxGeometry(0.03, 0.03, 0.2).translate(0, 0, 0.05),
-
-  // Cylinder H=0.2. Rotated X means Y is Up (Z in world).
-  // Translate Y (Up) to 0.05.
-  INDUSTRIAL: new THREE.CylinderGeometry(0.02, 0.02, 0.2, 6).translate(0, 0.05, 0).rotateX(Math.PI/2),
-
-  // Box H=0.3. Bottom -0.05. Center = -0.05 + 0.15 = 0.1.
-  SKYSCRAPER: new THREE.BoxGeometry(0.025, 0.025, 0.3).translate(0, 0, 0.1)
+// Types de bâtiments avec géométries variées
+const BUILDING_TYPES = {
+  RESIDENTIAL_SMALL: {
+    // 0.05 height
+    geometry: new THREE.BoxGeometry(0.015, 0.015, 0.05).translate(0, 0, 0.025),
+    color: new THREE.Color('#e8d5b7'),
+    heightRange: [0.03, 0.08]
+  },
+  RESIDENTIAL_MEDIUM: {
+    // 0.1 height
+    geometry: new THREE.BoxGeometry(0.02, 0.02, 0.1).translate(0, 0, 0.05),
+    color: new THREE.Color('#d4c4a8'),
+    heightRange: [0.08, 0.15]
+  },
+  RESIDENTIAL_TALL: {
+    // 0.2 height
+    geometry: new THREE.BoxGeometry(0.025, 0.025, 0.2).translate(0, 0, 0.1),
+    color: new THREE.Color('#c9b896'),
+    heightRange: [0.15, 0.25]
+  },
+  COMMERCIAL: {
+    // Extrude geometry cannot be constant if we want variation, but for instancing we need constant geo.
+    // We'll use a Box that looks like a building block
+    geometry: new THREE.BoxGeometry(0.03, 0.03, 0.12).translate(0, 0, 0.06),
+    color: new THREE.Color('#7eb8da'),
+    heightRange: [0.1, 0.2]
+  },
+  INDUSTRIAL: {
+    // Cylinder
+    geometry: new THREE.CylinderGeometry(0.015, 0.02, 0.1, 8).translate(0, 0.05, 0).rotateX(Math.PI/2),
+    color: new THREE.Color('#8b8b8b'),
+    heightRange: [0.05, 0.12]
+  },
+  SKYSCRAPER: {
+    geometry: new THREE.BoxGeometry(0.03, 0.03, 0.4).translate(0, 0, 0.2),
+    color: new THREE.Color('#4a90a4'),
+    heightRange: [0.3, 0.5]
+  }
 };
 
 const MATERIALS = {
-  RESIDENTIAL: new THREE.MeshStandardMaterial({ color: '#fca5a5', roughness: 0.8 }), // Light red
-  COMMERCIAL: new THREE.MeshStandardMaterial({ color: '#93c5fd', metalness: 0.5, roughness: 0.2 }), // Blue glass
-  INDUSTRIAL: new THREE.MeshStandardMaterial({ color: '#94a3b8', roughness: 0.9 }), // Concrete
-  SKYSCRAPER: new THREE.MeshStandardMaterial({ color: '#e2e8f0', metalness: 0.8, roughness: 0.1, emissive: '#1e293b', emissiveIntensity: 0.2 })
+  RESIDENTIAL_SMALL: new THREE.MeshStandardMaterial({ color: BUILDING_TYPES.RESIDENTIAL_SMALL.color, roughness: 0.8 }),
+  RESIDENTIAL_MEDIUM: new THREE.MeshStandardMaterial({ color: BUILDING_TYPES.RESIDENTIAL_MEDIUM.color, roughness: 0.8 }),
+  RESIDENTIAL_TALL: new THREE.MeshStandardMaterial({ color: BUILDING_TYPES.RESIDENTIAL_TALL.color, roughness: 0.8 }),
+  COMMERCIAL: new THREE.MeshStandardMaterial({ color: BUILDING_TYPES.COMMERCIAL.color, metalness: 0.5, roughness: 0.2 }),
+  INDUSTRIAL: new THREE.MeshStandardMaterial({ color: BUILDING_TYPES.INDUSTRIAL.color, roughness: 0.9 }),
+  SKYSCRAPER: new THREE.MeshStandardMaterial({ color: BUILDING_TYPES.SKYSCRAPER.color, metalness: 0.8, roughness: 0.1, emissive: '#1e293b', emissiveIntensity: 0.2 })
 };
 
 const DUMMY = new THREE.Object3D();
+const UP = new THREE.Vector3(0, 0, 1); // BoxGeometry is translated along Z, so 'up' is +Z locally
 
-export const CityMeshes: React.FC<{ lodLevel: LODLevel }> = ({ lodLevel }) => {
+export const CityMeshes: React.FC<{ lodLevel: string }> = ({ lodLevel }) => {
   const { countries } = useGameStore();
 
-  // Create instanced meshes for each type
-  const [resRef, comRef, indRef, skyRef] = [
-    useMemo(() => new THREE.InstancedMesh(GEOMETRIES.RESIDENTIAL, MATERIALS.RESIDENTIAL, 4000), []),
-    useMemo(() => new THREE.InstancedMesh(GEOMETRIES.COMMERCIAL, MATERIALS.COMMERCIAL, 2000), []),
-    useMemo(() => new THREE.InstancedMesh(GEOMETRIES.INDUSTRIAL, MATERIALS.INDUSTRIAL, 1000), []),
-    useMemo(() => new THREE.InstancedMesh(GEOMETRIES.SKYSCRAPER, MATERIALS.SKYSCRAPER, 500), [])
-  ];
+  // Define Refs for all types
+  const meshRefs = {
+    RESIDENTIAL_SMALL: useMemo(() => new THREE.InstancedMesh(BUILDING_TYPES.RESIDENTIAL_SMALL.geometry, MATERIALS.RESIDENTIAL_SMALL, 5000), []),
+    RESIDENTIAL_MEDIUM: useMemo(() => new THREE.InstancedMesh(BUILDING_TYPES.RESIDENTIAL_MEDIUM.geometry, MATERIALS.RESIDENTIAL_MEDIUM, 2000), []),
+    RESIDENTIAL_TALL: useMemo(() => new THREE.InstancedMesh(BUILDING_TYPES.RESIDENTIAL_TALL.geometry, MATERIALS.RESIDENTIAL_TALL, 1000), []),
+    COMMERCIAL: useMemo(() => new THREE.InstancedMesh(BUILDING_TYPES.COMMERCIAL.geometry, MATERIALS.COMMERCIAL, 2000), []),
+    INDUSTRIAL: useMemo(() => new THREE.InstancedMesh(BUILDING_TYPES.INDUSTRIAL.geometry, MATERIALS.INDUSTRIAL, 1000), []),
+    SKYSCRAPER: useMemo(() => new THREE.InstancedMesh(BUILDING_TYPES.SKYSCRAPER.geometry, MATERIALS.SKYSCRAPER, 500), [])
+  };
 
   useMemo(() => {
-    let rIdx = 0, cIdx = 0, iIdx = 0, sIdx = 0;
+    // Reset counts
+    const counts = {
+      RESIDENTIAL_SMALL: 0,
+      RESIDENTIAL_MEDIUM: 0,
+      RESIDENTIAL_TALL: 0,
+      COMMERCIAL: 0,
+      INDUSTRIAL: 0,
+      SKYSCRAPER: 0
+    };
 
     if (countries) {
       countries.forEach(country => {
-        // Only generate detailed buildings in closer views
-        const densityFactor = lodLevel === 'CITY_BUILDER' ? 3 : (lodLevel === 'REGIONAL' ? 1 : 0);
+        if (!country.cities) return;
 
+        // Density factor
+        const densityFactor = lodLevel === 'CITY' ? 3 : (lodLevel === 'REGIONAL' ? 1 : 0);
         if (densityFactor === 0) return;
 
-        const cities = country.cities || [{ lat: country.lat, lng: country.lng, name: country.name, is_capital: true }];
+        country.cities.forEach((city: any) => {
+          const seed = Math.abs(city.lat * city.lng);
+          const isCapital = city.is_capital;
+          const baseCount = isCapital ? 30 : 10;
+          const numBuildings = baseCount * densityFactor;
 
-        cities.forEach((city: any) => {
-           // Deterministic seed based on lat/lng
-           const seed = Math.abs(city.lat * city.lng);
-           const numBuildings = (city.is_capital ? 20 : 5) * densityFactor;
+          // Distribution Logic
+          for (let i = 0; i < numBuildings; i++) {
+             const rand = (seed + i * 0.1337) % 1.0;
+             let type: keyof typeof meshRefs;
 
-           for (let i = 0; i < numBuildings; i++) {
-               // Determine type based on random probability
-               const typeRand = (seed + i * 0.1) % 1.0;
-               let targetRef: THREE.InstancedMesh | null = null;
-               let index = 0;
-               let maxCount = 0;
+             if (isCapital) {
+               if (rand > 0.9) type = 'SKYSCRAPER';
+               else if (rand > 0.7) type = 'COMMERCIAL';
+               else if (rand > 0.5) type = 'RESIDENTIAL_TALL';
+               else if (rand > 0.3) type = 'RESIDENTIAL_MEDIUM';
+               else type = 'RESIDENTIAL_SMALL';
+             } else {
+               if (rand > 0.95) type = 'SKYSCRAPER'; // Rare
+               else if (rand > 0.85) type = 'COMMERCIAL';
+               else if (rand > 0.8) type = 'INDUSTRIAL';
+               else if (rand > 0.5) type = 'RESIDENTIAL_MEDIUM';
+               else type = 'RESIDENTIAL_SMALL';
+             }
 
-               if (typeRand > 0.9 && city.is_capital) { targetRef = skyRef; index = sIdx++; maxCount=500; }
-               else if (typeRand > 0.7) { targetRef = comRef; index = cIdx++; maxCount=2000; }
-               else if (typeRand > 0.5) { targetRef = indRef; index = iIdx++; maxCount=1000; }
-               else { targetRef = resRef; index = rIdx++; maxCount=4000; }
+             // Check limit
+             if (counts[type] >= meshRefs[type].count) continue;
 
-               if (!targetRef || index >= maxCount) continue;
+             // Placement
+             const spread = lodLevel === 'CITY' ? 0.06 : 0.02; // Wider spread in close view
+             const angle = (seed + i) * 17.0;
+             const dist = ((seed * i) % 100) / 100 * spread;
 
-               // Spread logic
-               // CITY_BUILDER: Spread out more to make a "city"
-               // REGIONAL: Cluster tightly
-               const spread = lodLevel === 'CITY_BUILDER' ? 0.05 : 0.01;
+             const offLat = Math.sin(angle) * dist;
+             const offLng = Math.cos(angle) * dist;
 
-               // Random offset (pseudo-random)
-               const angle = (seed + i) * 123.45;
-               const dist = ((seed * i) % 100) / 100 * spread;
+             // FIXED: Place at 5.03 to be above max displacement (5.02)
+             const pos = latLngToVector3(city.lat + offLat, city.lng + offLng, 5.03);
 
-               const offLat = Math.sin(angle) * dist;
-               const offLng = Math.cos(angle) * dist;
+             DUMMY.position.copy(pos);
 
-               // Position on surface (Radius 5)
-               const pos = latLngToVector3(city.lat + offLat, city.lng + offLng, 5);
+             // FIXED: Use quaternion to align UP (+Z) with surface normal (pos.normalize())
+             // BoxGeometry is created along Z-axis (translate 0,0,H/2)
+             DUMMY.quaternion.setFromUnitVectors(UP, pos.clone().normalize());
 
-               DUMMY.position.copy(pos);
-               // Look away from center (Sky)
-               DUMMY.lookAt(pos.clone().multiplyScalar(2));
+             // Random Scale (Variation)
+             const scaleXY = 0.8 + ((seed * i * 3) % 40)/100;
+             const scaleZ = 0.8 + ((seed * i * 7) % 50)/100;
+             DUMMY.scale.set(scaleXY, scaleXY, scaleZ);
 
-               // Scale variation (Width only, keep Height consistent with geometry or scale Z)
-               const scaleWidth = 0.8 + ((seed * i * 7) % 50)/50 * 0.4;
-               const scaleHeight = 0.8 + ((seed * i * 13) % 100)/100 * 0.5; // Scale height slightly
-
-               DUMMY.scale.set(scaleWidth, scaleWidth, scaleHeight);
-
-               DUMMY.updateMatrix();
-               targetRef.setMatrixAt(index, DUMMY.matrix);
-           }
+             DUMMY.updateMatrix();
+             meshRefs[type].setMatrixAt(counts[type]++, DUMMY.matrix);
+          }
         });
       });
     }
 
     // Update instances
-    resRef.count = rIdx;
-    comRef.count = cIdx;
-    indRef.count = iIdx;
-    skyRef.count = sIdx;
+    Object.keys(meshRefs).forEach((key) => {
+       const k = key as keyof typeof meshRefs;
+       meshRefs[k].count = counts[k];
+       meshRefs[k].instanceMatrix.needsUpdate = true;
+    });
 
-    resRef.instanceMatrix.needsUpdate = true;
-    comRef.instanceMatrix.needsUpdate = true;
-    indRef.instanceMatrix.needsUpdate = true;
-    skyRef.instanceMatrix.needsUpdate = true;
+  }, [countries, lodLevel]);
 
-  }, [countries, lodLevel, resRef, comRef, indRef, skyRef]);
-
-  // If invisible, don't render
-  if (lodLevel === 'GLOBE') return null;
+  if (lodLevel === 'GLOBE' || lodLevel === 'CONTINENTAL') return null;
 
   return (
     <group>
-      <primitive object={resRef} />
-      <primitive object={comRef} />
-      <primitive object={indRef} />
-      <primitive object={skyRef} />
+      {Object.keys(meshRefs).map((key) => (
+        <primitive key={key} object={meshRefs[key as keyof typeof meshRefs]} />
+      ))}
     </group>
   );
 };
