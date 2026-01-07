@@ -7,64 +7,35 @@ import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
 import { VectorBorders } from './VectorBorders';
 import { CityMeshes } from './CityMeshes';
+import { useLOD } from '../hooks/useLOD';
+import TerrainSystem from './TerrainSystem';
+import { RoadNetwork } from './RoadNetwork';
+import { PoliticalOverlay } from './PoliticalOverlay';
 
 // --- LE GLOBE ---
 const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
-  const gl = useThree((state) => state.gl);
 
-  // On charge une "Detail Map" (Texture de roche/sol qui se répète)
-  // Utilise cette URL stable de texture de bruit
-  const [baseMap, normalMap, detailMap] = useLoader(THREE.TextureLoader, [
-    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg',
-    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_normal_2048.jpg',
-    'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/terrain/grasslight-big.jpg'
-  ], (loader) => loader.setCrossOrigin('anonymous'));
-
-  // Configuration de la Detail Map (LE SECRET DU ZOOM NET)
-  useMemo(() => {
-    detailMap.wrapS = detailMap.wrapT = THREE.RepeatWrapping;
-    detailMap.repeat.set(50, 50); // On répète la texture 50 fois -> Grain très fin
-
-    const maxAnisotropy = gl.capabilities.getMaxAnisotropy();
-    baseMap.anisotropy = maxAnisotropy;
-    normalMap.anisotropy = maxAnisotropy;
-    detailMap.anisotropy = maxAnisotropy;
-
-    baseMap.minFilter = THREE.LinearMipMapLinearFilter;
-    normalMap.minFilter = THREE.LinearMipMapLinearFilter;
-    detailMap.minFilter = THREE.LinearMipMapLinearFilter;
-  }, [baseMap, normalMap, detailMap, gl]);
-
+  const { currentLOD, features, updateLOD } = useLOD(15);
   const [cameraDistance, setCameraDistance] = useState(15);
 
   useFrame((state) => {
     const dist = state.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
     if (Math.abs(dist - cameraDistance) > 0.1) {
       setCameraDistance(dist);
+      updateLOD(dist);
       onZoomChange(dist);
     }
   });
 
   return (
     <group rotation={[0, 0, 0.2]}>
-      {/* 1. LA TERRE (Avec Detail Map pour l'effet "Jeu Vidéo") */}
-      <mesh receiveShadow castShadow>
-        <sphereGeometry args={[5, 128, 128]} />
-        <meshStandardMaterial
-          map={baseMap}
-          normalMap={normalMap}
-          normalScale={new THREE.Vector2(1, 1)}
-
-          // ASTUCE DU DETAIL MAP : On mixe la couleur globale avec le détail
-          roughnessMap={detailMap}
-          roughness={1}
-          metalness={0.1}
-
-          // Assure-toi que wireframe est bien sur FALSE ou absent !
-          wireframe={false}
-        />
-      </mesh>
+      {/* 1. LA TERRE (Terrain System avec Shader LOD) */}
+      <TerrainSystem
+        lodLevel={currentLOD}
+        cameraDistance={cameraDistance}
+        politicalBlend={features.showPoliticalOverlay ? 1.0 : 0.0}
+      />
 
       {/* 2. ATMOSPHÈRE (Légère) */}
       <mesh scale={[1.02, 1.02, 1.02]}>
@@ -72,10 +43,16 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
          <meshStandardMaterial color="#4466aa" transparent opacity={0.15} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
-      {/* 3. VILLES EN 3D (Nouveau !) */}
-      <CityMeshes />
+      {/* 3. VILLES EN 3D (Adaptées au LOD) */}
+      {features.showBuildings && <CityMeshes lodLevel={currentLOD} />}
 
-      {/* 4. FRONTIÈRES (VectorBorders) */}
+      {/* 4. INFRASTRUCTURE */}
+      {features.showRoads && <RoadNetwork lodLevel={currentLOD} />}
+
+      {/* 5. OVERLAY POLITIQUE */}
+      {features.showPoliticalOverlay && <PoliticalOverlay lodLevel={currentLOD} />}
+
+      {/* 6. FRONTIÈRES (VectorBorders) */}
       {/* Vérifie que tu n'as pas laissé de grille ici. Juste les lignes. */}
       <VectorBorders radius={5} />
 
