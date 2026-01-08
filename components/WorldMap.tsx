@@ -62,13 +62,13 @@ const EarthGroup = () => {
          <meshStandardMaterial color="#4466aa" transparent opacity={0.15} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
-      {/* 3. VILLES EN 3D (Procedural) */}
-      {features.showBuildings && (
-        <ProceduralBuildings
-            cities={allCities}
-            globeRadius={5}
-        />
-      )}
+      {/* 3. VILLES EN 3D (Procedural) - OPTIMISÉ */}
+      {/* On garde le composant monté pour éviter les recalculs, on gère juste la visibilité */}
+      <ProceduralBuildings
+          cities={allCities}
+          globeRadius={5}
+          visible={features.showBuildings}
+      />
 
       {/* 4. VÉGÉTATION */}
       {features.showVegetation && <VegetationSystem lodLevel={vegetationLOD} />}
