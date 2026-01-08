@@ -1,54 +1,15 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import gsap from 'gsap';
+import { GlobePhysics, DEFAULT_GLOBE_PHYSICS_CONFIG } from '../systems/GlobePhysics';
+import { useLODStore, LOD_CONFIGS, getLODFromDistance, LODLevel } from '../systems/LODManager';
 
-// --- CONFIGURATION ---
-
-type CameraMode = 'GLOBE' | 'CONTINENTAL' | 'REGIONAL' | 'CITY_BUILDER';
-
-const CAMERA_MODES = {
-  GLOBE: {
-    rotateSpeed: 0.8,
-    zoomSpeed: 1.2,
-    panSpeed: 0,
-    enablePan: false,
-    maxPolarAngle: Math.PI * 0.85,
-    minPolarAngle: Math.PI * 0.15,
-    fov: 45,
-    minDistance: 1.0 // FIXED: Lowered to allow seamless transition
-  },
-  CONTINENTAL: {
-    rotateSpeed: 0.5,
-    zoomSpeed: 1.0,
-    panSpeed: 0.3,
-    enablePan: true,
-    maxPolarAngle: Math.PI * 0.85,
-    minPolarAngle: Math.PI * 0.15,
-    fov: 50,
-    minDistance: 1.0
-  },
-  REGIONAL: {
-    rotateSpeed: 0.3,
-    zoomSpeed: 0.8,
-    panSpeed: 0.6,
-    enablePan: true,
-    maxPolarAngle: Math.PI * 0.9,
-    minPolarAngle: Math.PI * 0.1,
-    fov: 55,
-    minDistance: 0.5
-  },
-  CITY_BUILDER: {
-    rotateSpeed: 0.2,
-    zoomSpeed: 0.5,
-    panSpeed: 1.0,
-    enablePan: true,
-    maxPolarAngle: Math.PI * 0.97, // Horizon view allowed
-    minPolarAngle: 0.1,
-    fov: 60,
-    minDistance: 0.5
-  }
-};
+// Globe configuration
+const GLOBE_RADIUS = 5;
+const MIN_ALTITUDE = 0.15;
+const TRANSITION_DURATION = 0.5; // seconds
 
 interface CameraControllerProps {
   onZoomChange?: (altitude: number) => void;
@@ -56,136 +17,197 @@ interface CameraControllerProps {
 
 export const CameraController: React.FC<CameraControllerProps> = ({ onZoomChange }) => {
   const controlsRef = useRef<any>(null);
-  const { camera } = useThree();
+  const { camera, gl } = useThree();
 
-  // State for mode management
-  const currentModeRef = useRef<CameraMode>('GLOBE');
+  // Physics system
+  const physicsRef = useRef(new GlobePhysics(DEFAULT_GLOBE_PHYSICS_CONFIG));
 
-  // Transition management
-  const transitionRef = useRef({
-    active: false,
-    startTime: 0,
-    duration: 0.8, // seconds
-    startTarget: new THREE.Vector3(),
-    endTarget: new THREE.Vector3(),
-  });
+  // Mode tracking
+  const currentModeRef = useRef<LODLevel>('GLOBE');
+  const isTransitioningRef = useRef(false);
 
-  // Calculate current mode based on distance
-  const getMode = (distance: number): CameraMode => {
-    if (distance > 12) return 'GLOBE';
-    if (distance > 6) return 'CONTINENTAL';
-    if (distance > 3) return 'REGIONAL';
-    return 'CITY_BUILDER';
-  };
+  // Surface target for non-globe modes
+  const surfaceTargetRef = useRef(new THREE.Vector3(0, 0, GLOBE_RADIUS));
 
-  useFrame((state, delta) => {
-    if (!controlsRef.current) return;
+  // GSAP timeline reference for cleanup
+  const timelineRef = useRef<gsap.core.Timeline | null>(null);
+
+  // LOD store actions
+  const { checkAndUpdateLOD, startTransition, endTransition } = useLODStore();
+
+  // Transition between camera modes using GSAP
+  const transitionToMode = useCallback((fromMode: LODLevel, toMode: LODLevel) => {
+    if (isTransitioningRef.current) return;
+
     const controls = controlsRef.current;
+    if (!controls) return;
 
-    // 1. Calculate real distance
-    const distanceToCenter = camera.position.length();
+    isTransitioningRef.current = true;
 
-    // Notify parent
-    if (onZoomChange) {
-      onZoomChange(distanceToCenter);
+    // Kill any existing timeline
+    if (timelineRef.current) {
+      timelineRef.current.kill();
     }
 
-    const newMode = getMode(distanceToCenter);
+    const fromConfig = LOD_CONFIGS[fromMode];
+    const toConfig = LOD_CONFIGS[toMode];
 
-    // 2. Handle Mode Transitions
-    if (newMode !== currentModeRef.current) {
-      // Trigger transition logic
-      const prevMode = currentModeRef.current;
-      currentModeRef.current = newMode;
+    // Create GSAP timeline for coordinated animations
+    const tl = gsap.timeline({
+      onComplete: () => {
+        isTransitioningRef.current = false;
+        currentModeRef.current = toMode;
+        endTransition();
+      },
+    });
 
-      // Handle Target Transition
-      // If going from GLOBE (Fixed target) to OTHERS (Pan enabled) -> Move target to surface
-      // If going from OTHERS to GLOBE -> Move target back to center
+    timelineRef.current = tl;
 
-      const isEnteringGlobe = newMode === 'GLOBE';
-      const isLeavingGlobe = prevMode === 'GLOBE';
+    // Animate OrbitControls parameters
+    tl.to(controls, {
+      rotateSpeed: toConfig.rotateSpeed,
+      zoomSpeed: toConfig.zoomSpeed,
+      panSpeed: toConfig.panSpeed,
+      maxPolarAngle: toConfig.maxPolarAngle,
+      minPolarAngle: toConfig.minPolarAngle,
+      duration: TRANSITION_DURATION,
+      ease: 'power2.inOut',
+    }, 0);
 
-      if (isEnteringGlobe || isLeavingGlobe) {
-        transitionRef.current.active = true;
-        transitionRef.current.startTime = state.clock.elapsedTime;
-        transitionRef.current.startTarget.copy(controls.target);
+    // Animate camera FOV
+    const perspCamera = camera as THREE.PerspectiveCamera;
+    tl.to(perspCamera, {
+      fov: toConfig.fov,
+      duration: TRANSITION_DURATION,
+      ease: 'power2.inOut',
+      onUpdate: () => perspCamera.updateProjectionMatrix(),
+    }, 0);
 
-        if (isEnteringGlobe) {
-           transitionRef.current.endTarget.set(0, 0, 0);
-        } else {
-           // Leaving globe: Set target to the surface point directly under camera (or forward)
-           // Project camera vector to surface radius (approx 5)
-           const surfacePoint = camera.position.clone().normalize().multiplyScalar(5);
-           transitionRef.current.endTarget.copy(surfacePoint);
-        }
+    // Handle target transition based on target modes
+    if (fromConfig.targetMode !== toConfig.targetMode) {
+      const currentTarget = controls.target.clone();
+      let newTarget: THREE.Vector3;
+
+      if (toConfig.targetMode === 'center') {
+        // Moving to GLOBE mode - center target
+        newTarget = new THREE.Vector3(0, 0, 0);
+      } else {
+        // Moving to surface mode - target on globe surface
+        newTarget = camera.position.clone().normalize().multiplyScalar(GLOBE_RADIUS);
+        surfaceTargetRef.current.copy(newTarget);
       }
+
+      // Animate target position
+      tl.to(controls.target, {
+        x: newTarget.x,
+        y: newTarget.y,
+        z: newTarget.z,
+        duration: TRANSITION_DURATION,
+        ease: 'power2.inOut',
+      }, 0);
     }
 
-    // 3. Apply Transitions (Target)
-    if (transitionRef.current.active) {
-       const elapsed = state.clock.elapsedTime - transitionRef.current.startTime;
-       const progress = Math.min(elapsed / transitionRef.current.duration, 1.0);
+    // Update enablePan at midpoint of transition
+    tl.call(() => {
+      controls.enablePan = toConfig.enablePan;
+    }, [], TRANSITION_DURATION / 2);
 
-       // EaseInOutQuad
-       const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+    // Start LOD transition in store
+    startTransition(fromMode, toMode);
 
-       // Interpolate Target
-       controls.target.lerpVectors(
-         transitionRef.current.startTarget,
-         transitionRef.current.endTarget,
-         ease
-       );
+  }, [camera, startTransition, endTransition]);
 
-       // If finished
-       if (progress >= 1.0) {
-         transitionRef.current.active = false;
-         // Ensure exact end value
-         controls.target.copy(transitionRef.current.endTarget);
-       }
+  // Main frame loop
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const distance = camera.position.length();
+
+    // === 1. COLLISION CHECK (HIGHEST PRIORITY) ===
+    const physics = physicsRef.current;
+    const minAllowedDistance = physics.getMinAllowedDistance();
+
+    if (distance < minAllowedDistance) {
+      // Push camera back to minimum altitude
+      camera.position.normalize().multiplyScalar(minAllowedDistance);
+      controls.update();
     }
 
-    // 4. Apply Mode Parameters (Smoothly blend FOV)
-    const params = CAMERA_MODES[currentModeRef.current];
+    // === 2. MODE DETECTION & TRANSITION ===
+    const newMode = getLODFromDistance(distance);
 
-    // Smoothly interpolate parameters to avoid jumps
-    controls.rotateSpeed = THREE.MathUtils.lerp(controls.rotateSpeed, params.rotateSpeed, 0.1);
-    controls.zoomSpeed = THREE.MathUtils.lerp(controls.zoomSpeed, params.zoomSpeed, 0.1);
-    controls.panSpeed = THREE.MathUtils.lerp(controls.panSpeed, params.panSpeed, 0.1);
-
-    // Set booleans directly
-    controls.enablePan = params.enablePan;
-
-    // Angles need smooth lerp too
-    controls.maxPolarAngle = THREE.MathUtils.lerp(controls.maxPolarAngle, params.maxPolarAngle, 0.05);
-    controls.minPolarAngle = THREE.MathUtils.lerp(controls.minPolarAngle, params.minPolarAngle, 0.05);
-
-    // FOV Animation
-    if (camera instanceof THREE.PerspectiveCamera) {
-      // Smoothly move FOV to target FOV
-      camera.fov = THREE.MathUtils.lerp(camera.fov, params.fov, 0.05);
-      camera.updateProjectionMatrix();
+    if (newMode !== currentModeRef.current && !isTransitioningRef.current) {
+      transitionToMode(currentModeRef.current, newMode);
     }
 
-    // 5. Dynamic MinDistance
-    // FIXED: Use a lower minDistance everywhere to allow seamless zoom.
-    // The previous logic clamped it to 12.1 in GLOBE mode which prevented zooming in.
-    // Now we just keep it low (0.5 or 1.0) and let the user fly.
-    // However, if we want to force "Globe View" to be far, we rely on the visual cues, not a hard clamp that traps them.
-    // We can gently nudge it, but 12.1 was too aggressive.
+    // === 3. UPDATE SURFACE TARGET (for non-globe modes, only when not transitioning) ===
+    const currentConfig = LOD_CONFIGS[currentModeRef.current];
 
-    controls.minDistance = THREE.MathUtils.lerp(controls.minDistance, params.minDistance, 0.1);
+    if (currentConfig.targetMode === 'surface_lock' && !isTransitioningRef.current) {
+      // Calculate surface point directly under camera
+      const surfacePoint = camera.position.clone().normalize().multiplyScalar(GLOBE_RADIUS);
+      surfaceTargetRef.current.copy(surfacePoint);
 
+      // Gently update target to follow surface (very subtle, no jerky movements)
+      // This only happens in surface_lock mode and uses a very small factor
+      controls.target.lerp(surfacePoint, 0.02);
+    }
+
+    // === 4. DYNAMIC minDistance ===
+    // Update minDistance based on current mode to prevent zooming too close
+    const effectiveMinDistance = currentConfig.targetMode === 'center'
+      ? GLOBE_RADIUS + 1
+      : minAllowedDistance;
+
+    if (controls.minDistance !== effectiveMinDistance && !isTransitioningRef.current) {
+      controls.minDistance = effectiveMinDistance;
+    }
+
+    // === 5. UPDATE CONTROLS ===
     controls.update();
+
+    // === 6. NOTIFY PARENT ===
+    if (onZoomChange) {
+      onZoomChange(distance);
+    }
+
+    // === 7. UPDATE LOD STORE ===
+    checkAndUpdateLOD(distance);
   });
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timelineRef.current) {
+        timelineRef.current.kill();
+      }
+    };
+  }, []);
 
   return (
     <OrbitControls
       ref={controlsRef}
-      enableDamping={true}
-      dampingFactor={0.1}
+      args={[camera, gl.domElement]}
+      // Initial values (GLOBE mode)
+      rotateSpeed={LOD_CONFIGS.GLOBE.rotateSpeed}
+      zoomSpeed={LOD_CONFIGS.GLOBE.zoomSpeed}
+      panSpeed={LOD_CONFIGS.GLOBE.panSpeed}
+      // Limits
+      minDistance={GLOBE_RADIUS + 1}
       maxDistance={80}
+      maxPolarAngle={LOD_CONFIGS.GLOBE.maxPolarAngle}
+      minPolarAngle={LOD_CONFIGS.GLOBE.minPolarAngle}
+      // Behavior
+      enableDamping={true}
+      dampingFactor={0.05}
       enablePan={false}
-      minDistance={1.0} // Start low to avoid initial trap
+      screenSpacePanning={false}
+      // Touch settings
+      touches={{
+        ONE: THREE.TOUCH.ROTATE,
+        TWO: THREE.TOUCH.DOLLY_PAN,
+      }}
     />
   );
 };
