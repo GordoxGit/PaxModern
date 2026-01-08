@@ -36,6 +36,7 @@ const EarthGroup = () => {
 
   const [cameraDistance, setCameraDistance] = useState(15);
 
+  // Update camera distance and LOD on each frame
   useFrame((state) => {
     const dist = state.camera.position.length();
 
@@ -66,10 +67,17 @@ const EarthGroup = () => {
         countries={countries}
       />
 
-      {/* 2. ATMOSPHÈRE (Légère) */}
+      {/* 2. ATMOSPHERE (Subtle) */}
       <mesh scale={[1.02, 1.02, 1.02]}>
-         <sphereGeometry args={[5, 64, 64]} />
-         <meshStandardMaterial color="#4466aa" transparent opacity={0.15} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
+        <sphereGeometry args={[GLOBE_RADIUS, 64, 64]} />
+        <meshStandardMaterial
+          color="#4466aa"
+          transparent
+          opacity={0.12}
+          side={THREE.BackSide}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
       </mesh>
 
       {/* 3. VILLES EN 3D (Procedural) - OPTIMISÉ */}
@@ -100,13 +108,15 @@ const EarthGroup = () => {
         />
       )}
 
-      {/* MARQUEURS STRATÉGIQUES */}
+      {/* 7. STRATEGIC MARKERS (Country labels) */}
       {features.showCities && Array.isArray(countries) && countries.map((country) => (
         <StrategicMarker
           key={country.id}
           country={country}
           isSelected={selectedCountry === country.id}
           cameraDistance={cameraDistance}
+          labelScale={features.labelScale}
+          showCountryLabels={features.showCountryLabels}
           onClick={(e: any) => {
             e.stopPropagation();
             selectCountry(country.id);
@@ -117,31 +127,65 @@ const EarthGroup = () => {
   );
 };
 
-// --- MARQUEUR STRATÉGIQUE (Pion + Texte 3D) ---
-const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) => {
-  const position = useMemo(() => latLngToVector3(country.lat, country.lng, 5.03), [country.lat, country.lng]);
+// --- STRATEGIC MARKER (3D Label + Click target) ---
+interface StrategicMarkerProps {
+  country: any;
+  isSelected: boolean;
+  cameraDistance: number;
+  labelScale: number;
+  showCountryLabels: boolean;
+  onClick: (e: any) => void;
+}
+
+const StrategicMarker: React.FC<StrategicMarkerProps> = ({
+  country,
+  isSelected,
+  cameraDistance,
+  labelScale,
+  showCountryLabels,
+  onClick,
+}) => {
+  const position = useMemo(
+    () => latLngToVector3(country.lat, country.lng, GLOBE_RADIUS + 0.03),
+    [country.lat, country.lng]
+  );
+
   const color = isSelected ? '#ffd700' : '#ffffff';
 
-  // Afficher les noms plus tôt (dès 8 unités de distance)
-  const showText = cameraDistance > 8 || isSelected;
+  // Show text based on LOD and selection
+  const showText = showCountryLabels || isSelected || cameraDistance < 8;
 
   return (
     <group position={position}>
-      {/* Pion physique - Rendu invisible mais cliquable pour garder l'interaction */}
-      <mesh onClick={onClick} onPointerOver={() => document.body.style.cursor = 'pointer'} onPointerOut={() => document.body.style.cursor = 'auto'} visible={false}>
-        <sphereGeometry args={[0.04, 16, 16]} />
-        <meshStandardMaterial color={isSelected ? "#4ade80" : "#3b82f6"} emissive={isSelected ? "#4ade80" : "#000"} emissiveIntensity={0.5} />
+      {/* Invisible click target */}
+      <mesh
+        onClick={onClick}
+        onPointerOver={() => (document.body.style.cursor = 'pointer')}
+        onPointerOut={() => (document.body.style.cursor = 'auto')}
+        visible={false}
+      >
+        <sphereGeometry args={[0.05, 16, 16]} />
+        <meshStandardMaterial
+          color={isSelected ? '#4ade80' : '#3b82f6'}
+          emissive={isSelected ? '#4ade80' : '#000'}
+          emissiveIntensity={0.5}
+        />
       </mesh>
 
-      {/* Laser vertical si sélectionné */}
+      {/* Laser beam when selected */}
       {isSelected && (
         <mesh position={[0, 0.5, 0]}>
           <cylinderGeometry args={[0.01, 0.01, 1, 8]} />
-          <meshBasicMaterial color={color} transparent opacity={0.6} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial
+            color={color}
+            transparent
+            opacity={0.6}
+            blending={THREE.AdditiveBlending}
+          />
         </mesh>
       )}
 
-      {/* TEXTE 3D (Billboard pour faire face à la caméra) */}
+      {/* 3D Text Label */}
       <Billboard
         position={[0, 0.25, 0]}
         follow={true}
@@ -151,7 +195,7 @@ const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) 
       >
         {showText && (
           <Text
-            fontSize={0.2}
+            fontSize={0.2 * labelScale}
             color="white"
             anchorX="center"
             anchorY="middle"
@@ -166,7 +210,7 @@ const StrategicMarker = ({ country, isSelected, onClick, cameraDistance }: any) 
   );
 };
 
-// --- SCÈNE PRINCIPALE ---
+// --- MAIN SCENE ---
 export const WorldMap: React.FC = () => {
   return (
     <div className="w-full h-full bg-[#050a14] relative">
@@ -177,21 +221,26 @@ export const WorldMap: React.FC = () => {
         shadows
       >
         <Suspense fallback={null}>
+          {/* Lighting */}
           <ambientLight intensity={1.5} color="#b0c4de" />
           <directionalLight
-              position={[15, 5, 5]}
-              intensity={1.5}
-              color="#fff"
-              castShadow
+            position={[15, 5, 5]}
+            intensity={1.5}
+            color="#fff"
+            castShadow
+            shadow-mapSize-width={2048}
+            shadow-mapSize-height={2048}
           />
           <pointLight position={[-20, 0, -20]} intensity={0.5} color="#404040" />
 
+          {/* Starfield */}
           <Stars radius={300} depth={50} count={3000} factor={4} fade />
 
           <EarthGroup />
 
           <CameraController />
 
+          {/* Post-processing effects */}
           <EffectComposer disableNormalPass>
             <Bloom luminanceThreshold={0.5} mipmapBlur intensity={1.0} radius={0.5} />
             <Noise opacity={0.01} />
@@ -200,12 +249,13 @@ export const WorldMap: React.FC = () => {
         </Suspense>
       </Canvas>
 
+      {/* Loading overlay */}
       <Loader
         containerStyles={{ background: '#050a14' }}
         innerStyles={{ background: '#1e293b', width: '200px', height: '2px' }}
         barStyles={{ background: '#3b82f6', height: '2px' }}
         dataStyles={{ display: 'none' }}
-        dataInterpolation={() => "CONNEXION SATELLITE..."}
+        dataInterpolation={() => 'CONNEXION SATELLITE...'}
       />
     </div>
   );

@@ -194,6 +194,15 @@ export function CameraController({ onZoomChange }: CameraControllerProps) {
       : GLOBE_RADIUS + MIN_ALTITUDE;
   });
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timelineRef.current) {
+        timelineRef.current.kill();
+      }
+    };
+  }, []);
+
   return (
     <OrbitControls
       ref={controlsRef}
