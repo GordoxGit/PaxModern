@@ -187,3 +187,34 @@ export function useLODFeatures(): LODFeatures {
 export function useCurrentLOD(): LODLevel {
   return useLODStore((state) => state.currentLOD);
 }
+
+// Ajouter cette fonction exportée à la fin du fichier
+export const getLODFromDistance = (distance: number, current: LODLevel): LODLevel => {
+  // LOGIQUE HYSTÉRÉSIS : On laisse une marge pour éviter le clignotement
+
+  // Transition GLOBE <-> CONTINENTAL
+  if (current === 'GLOBE') {
+    if (distance < 18) return 'CONTINENTAL'; // On rentre
+    return 'GLOBE';
+  }
+  if (current === 'CONTINENTAL') {
+    if (distance > 22) return 'GLOBE'; // On sort (Marge de 4 unités)
+    if (distance < 10) return 'REGIONAL';
+    return 'CONTINENTAL';
+  }
+
+  // Transition CONTINENTAL <-> REGIONAL
+  if (current === 'REGIONAL') {
+    if (distance > 12) return 'CONTINENTAL';
+    if (distance < 6) return 'CITY_BUILDER';
+    return 'REGIONAL';
+  }
+
+  // Transition REGIONAL <-> CITY
+  if (current === 'CITY_BUILDER') {
+    if (distance > 7) return 'REGIONAL';
+    return 'CITY_BUILDER';
+  }
+
+  return 'GLOBE';
+};
