@@ -1,5 +1,5 @@
 // CameraController.tsx - REFONTE COMPLÈTE
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -68,6 +68,7 @@ interface CameraControllerProps {
 export function CameraController({ onZoomChange }: CameraControllerProps) {
   const { camera, gl } = useThree();
   const controlsRef = useRef<any>(null);
+  const timelineRef = useRef<gsap.core.Timeline | null>(null);
 
   const [currentMode, setCurrentMode] = useState<CameraMode>('GLOBE');
   const [isTransitioning, setIsTransitioning] = useState(false);

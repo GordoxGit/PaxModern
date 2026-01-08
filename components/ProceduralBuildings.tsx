@@ -1,3 +1,4 @@
+// AJOUTER 'useEffect' DANS L'IMPORT
 import { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { City } from '../types';
