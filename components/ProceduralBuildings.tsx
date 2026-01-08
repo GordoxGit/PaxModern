@@ -1,78 +1,65 @@
-// ProceduralBuildings.tsx - Bâtiments générés procéduralement
-import { useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { useLODFeatures } from '../systems/LODManager';
 import { City } from '../types';
 
-// Types de bâtiments avec leurs caractéristiques
-const BUILDING_TYPES = {
-  RESIDENTIAL_SMALL: {
-    baseSize: [0.03, 0.05, 0.03],
-    heightRange: [0.02, 0.05],
-    color: '#d4a574', // Beige
-    frequency: 0.4,
-  },
-  RESIDENTIAL_MEDIUM: {
-    baseSize: [0.04, 0.08, 0.04],
-    heightRange: [0.05, 0.12],
-    color: '#c9b896',
-    frequency: 0.25,
-  },
-  RESIDENTIAL_TALL: {
-    baseSize: [0.03, 0.15, 0.03],
-    heightRange: [0.12, 0.25],
-    color: '#b8a888',
-    frequency: 0.1,
-  },
-  COMMERCIAL: {
-    baseSize: [0.06, 0.1, 0.06],
-    heightRange: [0.08, 0.2],
-    color: '#7ba3c9', // Bleu verre
-    frequency: 0.15,
-  },
-  INDUSTRIAL: {
-    baseSize: [0.08, 0.04, 0.08],
-    heightRange: [0.03, 0.08],
-    color: '#8b8b8b', // Gris
-    frequency: 0.05,
-  },
-  SKYSCRAPER: {
-    baseSize: [0.04, 0.3, 0.04],
-    heightRange: [0.25, 0.5],
-    color: '#5a8ab5', // Bleu métal
-    frequency: 0.04,
-  },
-  LANDMARK: {
-    baseSize: [0.05, 0.15, 0.05],
-    heightRange: [0.1, 0.2],
-    color: '#c9a227', // Or
-    frequency: 0.01,
-  },
+// ==================================================================================
+// 1. RESSOURCES STATIQUES (Créées 1 seule fois pour tout le jeu -> Gain Perf x1000)
+// ==================================================================================
+
+// Géométries partagées (Low Poly style mais propres)
+const GEOMETRIES = {
+  BOX: new THREE.BoxGeometry(1, 1, 1),
+  CYLINDER: new THREE.CylinderGeometry(0.5, 0.5, 1, 8),
+  CONE: new THREE.ConeGeometry(0.5, 1, 4),
 };
+
+// Matériaux partagés (On ne crée pas 10 000 matériaux, on en utilise 7 en mémoire)
+const MATERIALS = {
+  RESIDENTIAL_SMALL: new THREE.MeshStandardMaterial({ color: '#d4a574', roughness: 0.8 }),
+  RESIDENTIAL_MEDIUM: new THREE.MeshStandardMaterial({ color: '#c9b896', roughness: 0.7 }),
+  RESIDENTIAL_TALL: new THREE.MeshStandardMaterial({ color: '#b8a888', roughness: 0.6 }),
+  COMMERCIAL: new THREE.MeshStandardMaterial({ color: '#7ba3c9', roughness: 0.2, metalness: 0.4 }),
+  INDUSTRIAL: new THREE.MeshStandardMaterial({ color: '#8b8b8b', roughness: 0.9 }),
+  SKYSCRAPER: new THREE.MeshStandardMaterial({ color: '#5a8ab5', roughness: 0.1, metalness: 0.8, emissive: '#0f172a', emissiveIntensity: 0.3 }),
+  LANDMARK: new THREE.MeshStandardMaterial({ color: '#c9a227', roughness: 0.3, metalness: 1.0 }),
+};
+
+// Configuration des types de bâtiments
+const BUILDING_TYPES = {
+  RESIDENTIAL_SMALL: { geo: 'BOX', mat: 'RESIDENTIAL_SMALL', size: [0.03, 0.05, 0.03], height: [0.02, 0.05], freq: 0.4 },
+  RESIDENTIAL_MEDIUM: { geo: 'BOX', mat: 'RESIDENTIAL_MEDIUM', size: [0.04, 0.08, 0.04], height: [0.05, 0.12], freq: 0.25 },
+  RESIDENTIAL_TALL: { geo: 'BOX', mat: 'RESIDENTIAL_TALL', size: [0.03, 0.15, 0.03], height: [0.12, 0.25], freq: 0.1 },
+  COMMERCIAL: { geo: 'BOX', mat: 'COMMERCIAL', size: [0.06, 0.1, 0.06], height: [0.08, 0.2], freq: 0.15 },
+  INDUSTRIAL: { geo: 'CYLINDER', mat: 'INDUSTRIAL', size: [0.08, 0.04, 0.08], height: [0.03, 0.08], freq: 0.05 },
+  SKYSCRAPER: { geo: 'BOX', mat: 'SKYSCRAPER', size: [0.04, 0.3, 0.04], height: [0.25, 0.5], freq: 0.04 },
+  LANDMARK: { geo: 'CONE', mat: 'LANDMARK', size: [0.05, 0.15, 0.05], height: [0.1, 0.2], freq: 0.01 },
+};
+
+// Variables temporaires pour les calculs (évite le Garbage Collection)
+const tempMatrix = new THREE.Matrix4();
+const tempPos = new THREE.Vector3();
+const tempUp = new THREE.Vector3();
+const tempQuat = new THREE.Quaternion();
+const tempScale = new THREE.Vector3();
 
 interface ProceduralBuildingsProps {
   cities: City[];
   globeRadius: number;
+  visible: boolean; // NOUVEAU: On contrôle juste la visibilité
 }
 
-export function ProceduralBuildings({ cities, globeRadius }: ProceduralBuildingsProps) {
-  const features = useLODFeatures();
+export function ProceduralBuildings({ cities, globeRadius, visible }: ProceduralBuildingsProps) {
 
-  // Générer les instances de bâtiments
-  const buildingInstances = useMemo(() => {
-    if (!features.showBuildings || features.buildingDetail === 'none') {
-      return null;
-    }
-
-    const instances: Map<string, THREE.Matrix4[]> = new Map();
-    Object.keys(BUILDING_TYPES).forEach(type => instances.set(type, []));
+  // Calcul des matrices UNE SEULE FOIS au chargement des villes (Memoization)
+  const instances = useMemo(() => {
+    const data: Record<string, THREE.Matrix4[]> = {};
+    Object.keys(BUILDING_TYPES).forEach(k => data[k] = []);
 
     cities.forEach((city) => {
-      // Convert city lat/lng to position
-      // Note: city object usually has lat/lng. If not, we skip.
+      // Sécurité anti-crash si données manquantes
       if (typeof city.lat !== 'number' || typeof city.lng !== 'number') return;
 
+      // Position Ville sur la sphère
       const phi = (90 - city.lat) * (Math.PI / 180);
       const theta = (city.lng + 180) * (Math.PI / 180);
       const cityPos = new THREE.Vector3(
@@ -81,122 +68,103 @@ export function ProceduralBuildings({ cities, globeRadius }: ProceduralBuildings
         globeRadius * Math.sin(phi) * Math.sin(theta)
       );
 
-      // Nombre de bâtiments selon population et si capitale
       const isCapital = city.is_capital;
-      const baseBuildingCount = isCapital ? 50 : 15;
-      const buildingCount = features.buildingDetail === 'detailed'
-        ? baseBuildingCount * 3
-        : baseBuildingCount;
+      // On génère un nombre fixe de bâtiments par type de ville
+      const buildingCount = isCapital ? 80 : 25;
 
-      // Générer bâtiments autour de la ville
       for (let i = 0; i < buildingCount; i++) {
-        // Position aléatoire dans un rayon autour de la ville
-        const angle = Math.random() * Math.PI * 2;
-        const distance = Math.random() * 0.02 * (isCapital ? 1.5 : 1);
-
-        // Position sur la sphère
-        const basePos = cityPos.clone();
-        const tangent1 = new THREE.Vector3().crossVectors(basePos, new THREE.Vector3(0, 1, 0)).normalize();
-        const tangent2 = new THREE.Vector3().crossVectors(basePos, tangent1).normalize();
-
-        const offset = tangent1.multiplyScalar(Math.cos(angle) * distance)
-          .add(tangent2.multiplyScalar(Math.sin(angle) * distance));
-
-        const buildingPos = basePos.add(offset).normalize().multiplyScalar(globeRadius);
-
-        // Choisir type de bâtiment selon probabilités
-        const typeRoll = Math.random();
+        // 1. Choix du type de bâtiment (Probabilités)
+        let typeKey = 'RESIDENTIAL_SMALL';
+        const rand = Math.random();
         let cumulative = 0;
-        let selectedType = 'RESIDENTIAL_SMALL';
-
-        for (const [type, config] of Object.entries(BUILDING_TYPES)) {
+        for (const [key, conf] of Object.entries(BUILDING_TYPES)) {
           // @ts-ignore
-          cumulative += config.frequency;
-          if (typeRoll <= cumulative) {
-            selectedType = type;
-            break;
-          }
+          cumulative += conf.freq;
+          if (rand <= cumulative) { typeKey = key; break; }
         }
+        // Bonus gratte-ciel pour les capitales
+        if (isCapital && Math.random() < 0.2) typeKey = 'SKYSCRAPER';
 
-        // Ajuster pour capitales (plus de gratte-ciels)
-        if (isCapital && Math.random() < 0.2) {
-          selectedType = 'SKYSCRAPER';
-        }
+        const config = BUILDING_TYPES[typeKey as keyof typeof BUILDING_TYPES];
 
-        // Créer matrice de transformation
-        const config = BUILDING_TYPES[selectedType as keyof typeof BUILDING_TYPES];
-        const height = config.heightRange[0] + Math.random() * (config.heightRange[1] - config.heightRange[0]);
+        // 2. Positionnement en anneaux autour de la ville
+        const angle = Math.random() * Math.PI * 2;
+        // Rayon de la ville (plus grand pour capitale)
+        const radius = Math.random() * 0.025 * (isCapital ? 1.8 : 1);
 
-        const matrix = new THREE.Matrix4();
+        // Mathématique vectorielle pour trouver le point sur la surface courbe
+        tempUp.copy(cityPos).normalize(); // Vecteur "Haut" local (Normale)
+        // Création d'un vecteur perpendiculaire pour le plan tangent
+        const tangent = new THREE.Vector3(0,1,0).cross(tempUp).normalize();
+        if (tangent.lengthSq() < 0.001) tangent.set(1,0,0).cross(tempUp).normalize(); // Cas pôles
 
-        // Position
-        matrix.setPosition(buildingPos);
+        const bitangent = new THREE.Vector3().crossVectors(tempUp, tangent);
 
-        // Rotation pour aligner avec la normale de la sphère
-        const up = buildingPos.clone().normalize();
-        const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-        const rotMatrix = new THREE.Matrix4().makeRotationFromQuaternion(quaternion);
-        matrix.multiply(rotMatrix);
+        // Décalage par rapport au centre de la ville
+        tempPos.copy(cityPos)
+          .addScaledVector(tangent, Math.cos(angle) * radius * globeRadius)
+          .addScaledVector(bitangent, Math.sin(angle) * radius * globeRadius)
+          .normalize().multiplyScalar(globeRadius); // On reprojette sur la surface parfaite
 
-        // Scale
-        const scale = new THREE.Matrix4().makeScale(
-          config.baseSize[0],
-          height,
-          config.baseSize[2]
-        );
-        matrix.multiply(scale);
+        // 3. Construction de la Matrice de Transformation
+        tempMatrix.identity();
+        tempMatrix.setPosition(tempPos);
 
-        instances.get(selectedType)!.push(matrix);
+        // Rotation (Les bâtiments pointent vers le ciel, alignés avec la normale)
+        tempQuat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tempPos.clone().normalize());
+        tempMatrix.makeRotationFromQuaternion(tempQuat);
+        tempMatrix.setPosition(tempPos); // Réappliquer pos après rotation
+
+        // Scale (Hauteur aléatoire)
+        const h = config.height[0] + Math.random() * (config.height[1] - config.height[0]);
+        tempScale.set(config.size[0], h, config.size[2]);
+        tempMatrix.scale(tempScale);
+
+        data[typeKey].push(tempMatrix.clone());
       }
     });
 
-    return instances;
-  }, [cities, features.showBuildings, features.buildingDetail, globeRadius]);
-
-  // Créer les InstancedMesh pour chaque type
-  const meshes = useMemo(() => {
-    if (!buildingInstances) return [];
-
-    return Array.from(buildingInstances.entries()).map(([type, matrices]) => {
-      if (matrices.length === 0) return null;
-
-      const config = BUILDING_TYPES[type as keyof typeof BUILDING_TYPES];
-
-      // Géométrie selon le type
-      let geometry: THREE.BufferGeometry;
-      if (type === 'INDUSTRIAL') {
-        geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 8);
-      } else if (type === 'LANDMARK') {
-        geometry = new THREE.ConeGeometry(0.5, 1, 4);
-      } else {
-        geometry = new THREE.BoxGeometry(1, 1, 1);
-      }
-
-      const material = new THREE.MeshStandardMaterial({
-        color: config.color,
-        roughness: 0.7,
-        metalness: type === 'SKYSCRAPER' ? 0.5 : 0.1,
-      });
-
-      const mesh = new THREE.InstancedMesh(geometry, material, matrices.length);
-
-      matrices.forEach((matrix, i) => {
-        mesh.setMatrixAt(i, matrix);
-      });
-
-      mesh.instanceMatrix.needsUpdate = true;
-
-      return { type, mesh };
-    }).filter(Boolean);
-  }, [buildingInstances]);
-
-  if (!features.showBuildings) return null;
+    return data;
+  }, [cities, globeRadius]); // Ne se recalcule JAMAIS sauf si la liste des villes change
 
   return (
-    <group>
-      {meshes.map((item) => (
-        item ? <primitive key={item.type} object={item.mesh} /> : null
-      ))}
+    <group visible={visible}>
+      {Object.entries(instances).map(([type, matrices]) => {
+        if (matrices.length === 0) return null;
+        const config = BUILDING_TYPES[type as keyof typeof BUILDING_TYPES];
+
+        return (
+          <InstancedBuildingMesh
+            key={type}
+            geometry={GEOMETRIES[config.geo as keyof typeof GEOMETRIES]}
+            material={MATERIALS[config.mat as keyof typeof MATERIALS]}
+            matrices={matrices}
+          />
+        );
+      })}
     </group>
   );
 }
+
+// Sous-composant optimisé pour gérer l'upload GPU
+const InstancedBuildingMesh = ({ geometry, material, matrices }: any) => {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+
+  useEffect(() => {
+    if (!meshRef.current) return;
+
+    // Remplissage du buffer GPU (Ultra rapide)
+    for (let i = 0; i < matrices.length; i++) {
+      meshRef.current.setMatrixAt(i, matrices[i]);
+    }
+    meshRef.current.instanceMatrix.needsUpdate = true;
+  }, [matrices]);
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[geometry, material, matrices.length]}
+      frustumCulled={false} // Important : évite le flickering quand on tourne la caméra vite
+    />
+  );
+};
