@@ -19,7 +19,13 @@ const MATERIALS = {
 // Variable temp pour éviter le Garbage Collection
 const tempMatrix = new THREE.Matrix4();
 
-export function ProceduralBuildings({ cities, globeRadius, visible }: { cities: City[], globeRadius: number, visible: boolean }) {
+interface ProceduralBuildingsProps {
+  cities: City[];
+  globeRadius: number;
+  visible: boolean;
+}
+
+export function ProceduralBuildings({ cities, globeRadius, visible }: ProceduralBuildingsProps) {
 
   // 1. CALCUL DES MATRICES (Exécuté 1 seule fois au chargement)
   const instances = useMemo(() => {
