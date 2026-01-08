@@ -11,12 +11,12 @@ import { ProceduralRoads } from './ProceduralRoads';
 import { VegetationSystem } from './VegetationSystem';
 import { CameraController } from './CameraController';
 import { EarthSDF } from './EarthSDF';
-import { useLODStore, useLODFeatures } from '../systems/LODManager';
+import { useLODStore, useLODFeatures, getLODFromDistance } from '../systems/LODManager';
 
 // --- LE GLOBE ---
 const EarthGroup = () => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
-  const { currentLOD } = useLODStore();
+  const { currentLOD, setLOD } = useLODStore();
   const features = useLODFeatures();
 
   const geoJsonData = useLoader(THREE.FileLoader, '/assets/countries.geo.json', (loader) => {
@@ -38,6 +38,15 @@ const EarthGroup = () => {
 
   useFrame((state) => {
     const dist = state.camera.position.length();
+
+    // UTILISATION DE LA NOUVELLE LOGIQUE STABLE
+    const newLOD = getLODFromDistance(dist, currentLOD);
+
+    // On ne met à jour que si ça a VRAIMENT changé (évite le spam console/render)
+    if (newLOD !== currentLOD) {
+      setLOD(newLOD);
+    }
+
     if (Math.abs(dist - cameraDistance) > 0.05) {
       setCameraDistance(dist);
     }
@@ -50,9 +59,10 @@ const EarthGroup = () => {
   return (
     <group rotation={[0, 0, 0.2]}>
       {/* 1. LA TERRE (SDF System) */}
+      {/* FIX TEXTURE : Segments fixes à 128 pour éviter la reconstruction */}
       <EarthSDF
         radius={5}
-        segments={features.terrainSegments}
+        segments={128}
         countries={countries}
       />
 
@@ -63,10 +73,10 @@ const EarthGroup = () => {
       </mesh>
 
       {/* 3. VILLES EN 3D (Procedural) - OPTIMISÉ */}
-      {/* On garde le composant monté pour éviter les recalculs, on gère juste la visibilité */}
+      {/* FIX PERF : On ne démonte jamais le composant, on change juste 'visible' */}
       <ProceduralBuildings
           cities={allCities}
-          globeRadius={5}
+          globeRadius={5.03}
           visible={features.showBuildings}
       />
 
