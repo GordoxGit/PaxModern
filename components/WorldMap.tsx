@@ -13,6 +13,8 @@ import { CameraController } from './CameraController';
 import { EarthSDF } from './EarthSDF';
 import { useLODStore, useLODFeatures, getLODFromDistance } from '../systems/LODManager';
 
+const GLOBE_RADIUS = 5;
+
 // --- LE GLOBE ---
 const EarthGroup = () => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
