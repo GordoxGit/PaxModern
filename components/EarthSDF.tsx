@@ -1,409 +1,426 @@
-import React, { useMemo, useRef } from 'react';
-import * as THREE from 'three';
+// EarthSDF.tsx - Globe avec rendu SDF procédural
+import { useRef, useMemo, useEffect, useState } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
-import { TextureLoader } from 'three';
-import { useLODStore, LOD_CONFIGS } from '../systems/LODManager';
+import * as THREE from 'three';
+import { Country } from '../types';
 
-// Texture paths (keeping for fallback/blending)
-const TEXTURE_URLS = {
-  dayMap: '/assets/textures/2k_earth_daymap.jpg',
-  bumpMap: '/assets/textures/2k_earth_normal_map.jpg',
-  specularMap: '/assets/textures/2k_earth_specular_map.jpg',
-};
+// Simplex Noise GLSL embedded
+const noiseGLSL = `
+// Simplex 3D Noise
+// by Ian McEwan, Ashima Arts
+vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
 
-// Simplex noise GLSL code (embedded for shader)
-const NOISE_GLSL = `
-// Simplex 3D Noise - by Ian McEwan, Ashima Arts
-vec3 mod289_3(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-vec4 mod289_4(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-vec4 permute(vec4 x) { return mod289_4(((x * 34.0) + 1.0) * x); }
-vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v){
+  const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+  const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
 
-float snoise(vec3 v) {
-  const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
-  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+// First corner
+  vec3 i  = floor(v + dot(v, C.yyy) );
+  vec3 x0 = v - i + dot(i, C.xxx) ;
 
-  vec3 i = floor(v + dot(v, C.yyy));
-  vec3 x0 = v - i + dot(i, C.xxx);
-
+// Other corners
   vec3 g = step(x0.yzx, x0.xyz);
   vec3 l = 1.0 - g;
-  vec3 i1 = min(g.xyz, l.zxy);
-  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 i1 = min( g.xyz, l.zxy );
+  vec3 i2 = max( g.xyz, l.zxy );
 
-  vec3 x1 = x0 - i1 + C.xxx;
-  vec3 x2 = x0 - i2 + C.yyy;
-  vec3 x3 = x0 - D.yyy;
+  //  x0 = x0 - 0.0 + 0.0 * C
+  vec3 x1 = x0 - i1 + 1.0 * C.xxx;
+  vec3 x2 = x0 - i2 + 2.0 * C.xxx;
+  vec3 x3 = x0 - 1.0 + 3.0 * C.xxx;
 
-  i = mod289_3(i);
-  vec4 p = permute(permute(permute(
-      i.z + vec4(0.0, i1.z, i2.z, 1.0))
-    + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-    + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+// Permutations
+  i = mod(i, 289.0 );
+  vec4 p = permute( permute( permute(
+             i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+           + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
+           + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
 
-  float n_ = 0.142857142857;
-  vec3 ns = n_ * D.wyz - D.xzx;
+// Gradients
+  float n_ = 1.0/7.0; // N=7
+  vec3  ns = n_ * D.wyz - D.xzx;
 
-  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 j = p - 49.0 * floor(p * ns.z *ns.z);  //  mod(p,N*N)
+
   vec4 x_ = floor(j * ns.z);
-  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 y_ = floor(j - 7.0 * x_ );    // mod(j,N)
 
-  vec4 x = x_ * ns.x + ns.yyyy;
-  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 x = x_ *ns.x + ns.yyyy;
+  vec4 y = y_ *ns.x + ns.yyyy;
   vec4 h = 1.0 - abs(x) - abs(y);
 
-  vec4 b0 = vec4(x.xy, y.xy);
-  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 b0 = vec4( x.xy, y.xy );
+  vec4 b1 = vec4( x.zw, y.zw );
 
-  vec4 s0 = floor(b0) * 2.0 + 1.0;
-  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 s0 = floor(b0)*2.0 + 1.0;
+  vec4 s1 = floor(b1)*2.0 + 1.0;
   vec4 sh = -step(h, vec4(0.0));
 
-  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
-  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
 
-  vec3 p0 = vec3(a0.xy, h.x);
-  vec3 p1 = vec3(a0.zw, h.y);
-  vec3 p2 = vec3(a1.xy, h.z);
-  vec3 p3 = vec3(a1.zw, h.w);
+  vec3 p0 = vec3(a0.xy,h.x);
+  vec3 p1 = vec3(a0.zw,h.y);
+  vec3 p2 = vec3(a1.xy,h.z);
+  vec3 p3 = vec3(a1.zw,h.w);
 
-  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+//Normalise gradients
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
   p0 *= norm.x;
   p1 *= norm.y;
   p2 *= norm.z;
   p3 *= norm.w;
 
-  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+// Mix final noise value
+  vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
   m = m * m;
-  return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
-}
-
-// Fractal Brownian Motion
-float fbm(vec3 p, int octaves) {
-  float value = 0.0;
-  float amplitude = 0.5;
-  float frequency = 1.0;
-  for (int i = 0; i < 6; i++) {
-    if (i >= octaves) break;
-    value += amplitude * snoise(p * frequency);
-    amplitude *= 0.5;
-    frequency *= 2.0;
-  }
-  return value;
+  return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1),
+                                dot(p2,x2), dot(p3,x3) ) );
 }
 `;
 
-// Vertex Shader with procedural displacement
+// Shader Vertex
 const vertexShader = `
-${NOISE_GLSL}
+  varying vec2 vUv;
+  varying vec3 vPosition;
+  varying vec3 vNormal;
+  varying float vElevation;
 
-varying vec2 vUv;
-varying vec3 vNormal;
-varying vec3 vPosition;
-varying vec3 vWorldPosition;
-varying vec3 vViewPosition;
-varying float vElevation;
+  uniform float uTime;
+  uniform float uZoomLevel;
 
-uniform float uTime;
-uniform float uZoomLevel;
-uniform float uReliefIntensity;
-uniform sampler2D uBumpMap;
+  // Simplex noise pour relief procédural
+  ${noiseGLSL}
 
-void main() {
-  vUv = uv;
-  vNormal = normalize(normalMatrix * normal);
-  vPosition = position;
+  void main() {
+    vUv = uv;
+    vNormal = normalize(normalMatrix * normal);
 
-  // Calculate elevation based on position for procedural terrain
-  float elevation = 0.0;
+    // Élévation procédurale basée sur position (montagnes, océans)
+    float elevation = 0.0;
 
-  // Only add relief when zoomed in and relief is enabled
-  if (uReliefIntensity > 0.0 && uZoomLevel < 12.0) {
-    // Multi-octave noise for realistic terrain
-    float noise1 = snoise(position * 2.0) * 0.5;
-    float noise2 = snoise(position * 4.0) * 0.25;
-    float noise3 = snoise(position * 8.0) * 0.125;
-    float noise4 = snoise(position * 16.0) * 0.0625;
+    // Seulement ajouter du relief quand zoomé
+    if (uZoomLevel < 10.0) {
+      // Bruit multi-octaves pour terrain réaliste
+      float noise1 = snoise(position * 2.0) * 0.5;
+      float noise2 = snoise(position * 4.0) * 0.25;
+      float noise3 = snoise(position * 8.0) * 0.125;
+      elevation = (noise1 + noise2 + noise3) * 0.02;
 
-    // Combine noises for natural look
-    float combinedNoise = noise1 + noise2 + noise3 + noise4;
+      // Plus de relief quand plus zoomé
+      elevation *= smoothstep(10.0, 3.0, uZoomLevel);
+    }
 
-    // Also read from bump map for additional detail
-    float bumpHeight = texture2D(uBumpMap, uv).r;
+    vElevation = elevation;
+    vPosition = position;
 
-    // Mix procedural and texture-based height
-    elevation = mix(combinedNoise * 0.015, bumpHeight * 0.02, 0.5);
+    // Déplacer le vertex selon l'élévation
+    vec3 newPosition = position + normal * elevation;
 
-    // Scale by relief intensity and zoom level
-    float zoomFactor = smoothstep(12.0, 3.0, uZoomLevel);
-    elevation *= uReliefIntensity * zoomFactor;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(newPosition, 1.0);
   }
-
-  vElevation = elevation;
-
-  // Displace vertex along normal
-  vec3 newPosition = position + normal * elevation;
-
-  vec4 mvPosition = modelViewMatrix * vec4(newPosition, 1.0);
-  vViewPosition = -mvPosition.xyz;
-  vWorldPosition = (modelMatrix * vec4(newPosition, 1.0)).xyz;
-
-  gl_Position = projectionMatrix * mvPosition;
-}
 `;
 
-// Fragment Shader with SDF-style procedural rendering
+// Shader Fragment - Rendu SDF
 const fragmentShader = `
-${NOISE_GLSL}
+  precision highp float;
 
-precision highp float;
+  varying vec2 vUv;
+  varying vec3 vPosition;
+  varying vec3 vNormal;
+  varying float vElevation;
 
-varying vec2 vUv;
-varying vec3 vNormal;
-varying vec3 vPosition;
-varying vec3 vWorldPosition;
-varying vec3 vViewPosition;
-varying float vElevation;
+  uniform float uTime;
+  uniform float uZoomLevel;
+  uniform vec3 uSunDirection;
+  uniform float uPoliticalBlend;
 
-uniform float uTime;
-uniform float uZoomLevel;
-uniform float uPoliticalBlend;
-uniform float uReliefIntensity;
-uniform vec3 uSunDirection;
-uniform sampler2D uDayMap;
-uniform sampler2D uSpecularMap;
+  // Données des pays (passées via texture ou uniforms)
+  uniform sampler2D uCountryData; // Texture encodant les IDs pays
+  uniform sampler2D uCountryColors; // Palette de couleurs pays
 
-// === PROCEDURAL TERRAIN COLORS ===
-vec3 getOceanColor(float depth) {
-  vec3 shallowOcean = vec3(0.15, 0.45, 0.65);
-  vec3 deepOcean = vec3(0.02, 0.12, 0.25);
-  return mix(shallowOcean, deepOcean, smoothstep(0.0, -0.02, depth));
-}
+  // === FONCTIONS SDF ===
 
-vec3 getTerrainColor(vec3 pos, float elevation, float latitude) {
-  // Base colors for biomes
-  vec3 desert = vec3(0.82, 0.71, 0.55);
-  vec3 savanna = vec3(0.76, 0.70, 0.40);
-  vec3 grassland = vec3(0.28, 0.55, 0.22);
-  vec3 forest = vec3(0.13, 0.38, 0.15);
-  vec3 taiga = vec3(0.18, 0.32, 0.22);
-  vec3 tundra = vec3(0.55, 0.55, 0.50);
-  vec3 snow = vec3(0.95, 0.96, 0.98);
-  vec3 highland = vec3(0.45, 0.35, 0.28);
-  vec3 mountain = vec3(0.55, 0.50, 0.45);
-
-  // Absolute latitude for biome determination
-  float absLat = abs(latitude);
-
-  // Add some noise variation for natural look
-  float biomeNoise = snoise(pos * 5.0) * 0.15;
-
-  // Determine base biome from latitude
-  vec3 biomeColor;
-
-  if (absLat > 0.85) {
-    // Polar - snow and ice
-    biomeColor = snow;
-  } else if (absLat > 0.7) {
-    // Tundra
-    float snowMix = smoothstep(0.7, 0.85, absLat);
-    biomeColor = mix(tundra, snow, snowMix + biomeNoise);
-  } else if (absLat > 0.55) {
-    // Taiga/Boreal
-    biomeColor = mix(taiga, tundra, smoothstep(0.55, 0.7, absLat));
-  } else if (absLat > 0.35) {
-    // Temperate - forests and grasslands
-    float forestMix = snoise(pos * 3.0) * 0.5 + 0.5;
-    biomeColor = mix(grassland, forest, forestMix);
-  } else if (absLat > 0.15) {
-    // Subtropical - savanna and desert transition
-    float desertMix = smoothstep(0.15, 0.35, absLat);
-    vec3 subtropicalBase = mix(desert, savanna, snoise(pos * 4.0) * 0.5 + 0.5);
-    biomeColor = mix(subtropicalBase, grassland, desertMix);
-  } else {
-    // Tropical - mix of rainforest and desert
-    float rainforestMix = snoise(pos * 2.5) * 0.5 + 0.5;
-    biomeColor = mix(desert, forest, rainforestMix);
+  // Distance à un segment de ligne (pour frontières)
+  float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
   }
 
-  // Apply elevation-based modifications
-  float elevNorm = smoothstep(0.0, 0.02, elevation);
+  // Frontière nette à n'importe quel zoom grâce à fwidth()
+  float borderSDF(float dist, float thickness) {
+    float edge = fwidth(dist) * 1.5; // Anti-aliasing automatique
+    return smoothstep(thickness + edge, thickness - edge, dist);
+  }
 
-  // Mountains get rocky/snowy at higher elevations
-  if (elevNorm > 0.3) {
-    float mountainMix = smoothstep(0.3, 0.7, elevNorm);
-    biomeColor = mix(biomeColor, mountain, mountainMix * 0.7);
+  // === COULEURS TERRAIN PROCÉDURALES ===
 
-    // Snow caps on high mountains
-    float snowLine = 0.6 - absLat * 0.3; // Snow line lower at higher latitudes
-    if (elevNorm > snowLine) {
-      float snowMix = smoothstep(snowLine, snowLine + 0.2, elevNorm);
-      biomeColor = mix(biomeColor, snow, snowMix);
+  vec3 getTerrainColor(vec3 pos, float elevation) {
+    // Latitude pour biomes
+    float latitude = abs(pos.y);
+
+    // Couleurs de base
+    vec3 ocean = vec3(0.0, 0.2, 0.4);
+    vec3 coast = vec3(0.76, 0.70, 0.50); // Sable
+    vec3 lowland = vec3(0.13, 0.55, 0.13); // Vert plaine
+    vec3 highland = vec3(0.36, 0.25, 0.20); // Marron montagne
+    vec3 snow = vec3(0.95, 0.95, 0.98);
+    vec3 desert = vec3(0.82, 0.71, 0.55);
+
+    vec3 color;
+
+    // Océan (élévation négative)
+    if (elevation < -0.001) {
+      float depth = smoothstep(0.0, -0.02, elevation);
+      color = mix(vec3(0.1, 0.3, 0.5), ocean, depth);
     }
+    // Terre
+    else {
+      // Biome basé sur latitude
+      float desertFactor = smoothstep(0.15, 0.35, latitude) * (1.0 - smoothstep(0.35, 0.5, latitude));
+
+      // Élévation
+      float elevNorm = smoothstep(0.0, 0.02, elevation);
+
+      // Mix des couleurs
+      color = mix(lowland, highland, elevNorm);
+      color = mix(color, desert, desertFactor * 0.7);
+
+      // Neige aux pôles et sommets
+      float snowFactor = smoothstep(0.7, 0.9, latitude) + smoothstep(0.015, 0.02, elevation);
+      color = mix(color, snow, clamp(snowFactor, 0.0, 1.0));
+    }
+
+    return color;
   }
 
-  // Highland coloring for mid-elevations
-  if (elevNorm > 0.15 && elevNorm < 0.5) {
-    float highlandMix = smoothstep(0.15, 0.3, elevNorm) * (1.0 - smoothstep(0.3, 0.5, elevNorm));
-    biomeColor = mix(biomeColor, highland, highlandMix * 0.4);
+  // === ÉCLAIRAGE ===
+
+  vec3 calculateLighting(vec3 baseColor, vec3 normal, vec3 sunDir) {
+    float ambient = 0.3;
+    float diffuse = max(dot(normal, sunDir), 0.0) * 0.7;
+
+    // Fresnel pour effet atmosphérique
+    vec3 viewDir = normalize(-vPosition);
+    float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 3.0);
+    vec3 atmosphere = vec3(0.4, 0.6, 1.0) * fresnel * 0.3;
+
+    return baseColor * (ambient + diffuse) + atmosphere;
   }
 
-  return biomeColor;
-}
+  void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 sunDir = normalize(uSunDirection);
 
-// === SDF BORDER RENDERING ===
-// This provides sharp edges at any zoom level
-float sdfBorder(float dist, float thickness) {
-  float edge = fwidth(dist) * 1.5;
-  return smoothstep(thickness + edge, thickness - edge, dist);
-}
+    // Couleur terrain procédurale
+    vec3 terrainColor = getTerrainColor(vPosition, vElevation);
 
-// === LIGHTING ===
-vec3 calculateLighting(vec3 baseColor, vec3 normal, vec3 viewDir, float specularStrength) {
-  vec3 sunDir = normalize(uSunDirection);
+    // Récupérer ID pays depuis texture de données
+    vec4 countryData = texture2D(uCountryData, vUv);
+    float countryId = countryData.r * 255.0;
 
-  // Ambient
-  float ambient = 0.35;
+    // Couleur politique du pays
+    vec2 paletteUV = vec2(countryId / 256.0, 0.5);
+    vec3 politicalColor = texture2D(uCountryColors, paletteUV).rgb;
 
-  // Diffuse
-  float diffuse = max(dot(normal, sunDir), 0.0) * 0.65;
+    // Blend terrain/politique selon zoom
+    float politicalFactor = uPoliticalBlend * smoothstep(15.0, 8.0, uZoomLevel);
+    vec3 baseColor = mix(terrainColor, politicalColor, politicalFactor * 0.6);
 
-  // Specular (Blinn-Phong)
-  vec3 halfDir = normalize(sunDir + viewDir);
-  float NdotH = max(dot(normal, halfDir), 0.0);
-  float specular = pow(NdotH, 64.0) * specularStrength * 0.4;
+    // Distance aux frontières (encodée dans alpha de countryData)
+    // NOTE: Si SDF non disponible, alpha = 1.0 donc pas de bordure shader
+    float borderDist = countryData.a;
 
-  // Fresnel rim effect for atmosphere
-  float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 3.0);
-  vec3 atmosphere = vec3(0.4, 0.6, 1.0) * fresnel * 0.25;
+    // Frontières SDF - épaisseur adaptative au zoom
+    float borderThickness = 0.002 * uZoomLevel;
+    float border = borderSDF(borderDist, borderThickness);
 
-  return baseColor * (ambient + diffuse) + vec3(specular) + atmosphere;
-}
+    // Couleur frontière (vert Pax Modern)
+    vec3 borderColor = vec3(0.29, 0.87, 0.5); // #4ade80
 
-void main() {
-  vec3 normal = normalize(vNormal);
-  vec3 viewDir = normalize(vViewPosition);
+    // Appliquer frontière
+    baseColor = mix(baseColor, borderColor, border * smoothstep(3.0, 8.0, uZoomLevel));
 
-  // Sample satellite texture
-  vec4 satellite = texture2D(uDayMap, vUv);
-  vec4 specData = texture2D(uSpecularMap, vUv);
+    // Éclairage final
+    vec3 finalColor = calculateLighting(baseColor, normal, sunDir);
 
-  // Determine if ocean or land based on specular map
-  float isOcean = specData.r;
-
-  // Calculate latitude from position
-  float latitude = vPosition.y / length(vPosition);
-
-  // === GENERATE BASE COLOR ===
-  vec3 baseColor;
-
-  if (isOcean > 0.5) {
-    // Ocean
-    baseColor = getOceanColor(vElevation);
-  } else {
-    // Land - blend procedural with satellite based on zoom
-    vec3 proceduralColor = getTerrainColor(vPosition, vElevation, latitude);
-
-    // At far zoom, use more satellite. At close zoom, use more procedural
-    float proceduralMix = smoothstep(15.0, 5.0, uZoomLevel);
-    baseColor = mix(satellite.rgb, proceduralColor, proceduralMix * 0.6);
+    gl_FragColor = vec4(finalColor, 1.0);
   }
-
-  // === POLITICAL OVERLAY ===
-  // Apply subtle political tinting based on blend factor
-  if (uPoliticalBlend > 0.0 && uZoomLevel < 15.0) {
-    // Generate a pseudo-political color based on position
-    float politicalHash = snoise(vPosition * 0.5);
-    vec3 politicalTint = vec3(
-      0.4 + 0.3 * sin(politicalHash * 6.28),
-      0.4 + 0.3 * sin(politicalHash * 6.28 + 2.09),
-      0.4 + 0.3 * sin(politicalHash * 6.28 + 4.18)
-    );
-
-    float politicalFactor = uPoliticalBlend * smoothstep(15.0, 8.0, uZoomLevel) * 0.3;
-    baseColor = mix(baseColor, baseColor * 0.7 + politicalTint * 0.3, politicalFactor);
-  }
-
-  // === LIGHTING ===
-  float specularStrength = isOcean > 0.5 ? specData.r : 0.1;
-  vec3 litColor = calculateLighting(baseColor, normal, viewDir, specularStrength);
-
-  // === OUTPUT ===
-  gl_FragColor = vec4(litColor, 1.0);
-}
 `;
 
 interface EarthSDFProps {
-  lodLevel: string;
-  cameraDistance: number;
+  radius?: number;
+  segments?: number;
+  countries: Country[];
 }
 
-export const EarthSDF: React.FC<EarthSDFProps> = ({ lodLevel, cameraDistance }) => {
+export function EarthSDF({ radius = 5, segments = 256, countries }: EarthSDFProps) {
+  const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
 
-  // Get LOD features from store
-  const features = useLODStore((state) => state.features);
+  // Charger GeoJSON pour la génération de texture
+  const geoJsonData = useLoader(THREE.FileLoader, '/assets/countries.geo.json', (loader) => {
+    loader.setResponseType('json');
+  });
 
-  // Load textures
-  const [dayMap, bumpMap, specMap] = useLoader(TextureLoader, [
-    TEXTURE_URLS.dayMap,
-    TEXTURE_URLS.bumpMap,
-    TEXTURE_URLS.specularMap,
-  ]);
+  const [textures, setTextures] = useState<{data: THREE.Texture, colors: THREE.Texture} | null>(null);
 
-  // Configure textures for better quality
-  useMemo(() => {
-    [dayMap, bumpMap, specMap].forEach((tex) => {
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.anisotropy = 16;
-    });
-  }, [dayMap, bumpMap, specMap]);
+  useEffect(() => {
+    if (geoJsonData && countries.length > 0) {
+        // geoJsonData is already an object because of setResponseType('json')
+        const { countryDataTexture, countryColorsTexture } = generateCountryTextures(countries, geoJsonData);
+        setTextures({ data: countryDataTexture, colors: countryColorsTexture });
+    }
+  }, [countries, geoJsonData]);
 
-  // Calculate sphere segments based on LOD
-  const segments = useMemo(() => {
-    return features.terrainSegments;
-  }, [features.terrainSegments]);
+  // Uniforms
+  const uniforms = useMemo(() => ({
+    uTime: { value: 0 },
+    uZoomLevel: { value: 20 },
+    uSunDirection: { value: new THREE.Vector3(1, 0.5, 0.5).normalize() },
+    uPoliticalBlend: { value: 0.5 },
+    uCountryData: { value: new THREE.Texture() },
+    uCountryColors: { value: new THREE.Texture() },
+  }), []);
 
-  // Create shader material
-  const material = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      uniforms: {
-        uDayMap: { value: dayMap },
-        uBumpMap: { value: bumpMap },
-        uSpecularMap: { value: specMap },
-        uTime: { value: 0 },
-        uZoomLevel: { value: 15 },
-        uPoliticalBlend: { value: 0 },
-        uReliefIntensity: { value: 0 },
-        uSunDirection: { value: new THREE.Vector3(1, 0.5, 1).normalize() },
-      },
-      vertexShader,
-      fragmentShader,
-      side: THREE.FrontSide,
-    });
-  }, [dayMap, bumpMap, specMap]);
+  useEffect(() => {
+    if (textures && materialRef.current) {
+        materialRef.current.uniforms.uCountryData.value = textures.data;
+        materialRef.current.uniforms.uCountryColors.value = textures.colors;
+        materialRef.current.needsUpdate = true;
+    }
+  }, [textures]);
 
-  // Update uniforms each frame
   useFrame((state) => {
     if (materialRef.current) {
-      const mat = materialRef.current;
-      mat.uniforms.uTime.value = state.clock.elapsedTime;
-      mat.uniforms.uZoomLevel.value = cameraDistance;
-      mat.uniforms.uPoliticalBlend.value = features.politicalOpacity;
-      mat.uniforms.uReliefIntensity.value = features.reliefIntensity;
+      materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+
+      // Distance caméra pour LOD
+      const distance = state.camera.position.length();
+      materialRef.current.uniforms.uZoomLevel.value = distance;
     }
   });
 
-  // Store material reference
-  useMemo(() => {
-    if (material && materialRef.current !== material) {
-      materialRef.current = material;
-    }
-  }, [material]);
-
   return (
-    <mesh material={material} receiveShadow castShadow>
-      <sphereGeometry args={[5, segments, segments]} />
+    <mesh ref={meshRef}>
+      <sphereGeometry args={[radius, segments, segments]} />
+      <shaderMaterial
+        ref={materialRef}
+        vertexShader={vertexShader}
+        fragmentShader={fragmentShader}
+        uniforms={uniforms}
+      />
     </mesh>
   );
-};
+}
+
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 0, g: 0, b: 0 };
+}
+
+// Générer textures depuis GeoJSON avec Canvas 2D (Optimisé)
+function generateCountryTextures(countries: Country[], geoJson: any) {
+  const width = 4096; // Haute résolution
+  const height = 2048;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  if (!ctx) throw new Error("Could not get 2D context");
+
+  // Fond: Océan (ID 255)
+  ctx.fillStyle = 'rgb(255, 0, 0)';
+  ctx.fillRect(0, 0, width, height);
+
+  // Map country name/id to index
+  const countryMap = new Map();
+  countries.forEach((c, i) => {
+      // Use name or ID to match GeoJSON features
+      countryMap.set(c.id, i);
+      // Also map names just in case
+      countryMap.set(c.name, i);
+      if(c.name_fr) countryMap.set(c.name_fr, i);
+  });
+
+  // Dessiner les pays
+  geoJson.features.forEach((feature: any) => {
+      const countryName = feature.properties.name || feature.properties.ADMIN || feature.id;
+      // Simple matching - in real app might need better ID matching
+      // We try to find a matching country in our game state
+      let countryIndex = -1;
+
+      // Try to find by ID/Name logic
+      // This part depends on how GeoJSON properties match Country IDs
+      // For now, we assume simple matching or fallback
+
+      // FIXME: Matching logic needs to be robust.
+      // Assuming feature.id matches country.id or feature.properties.name matches country.name
+      const match = countries.find(c => c.name === countryName || c.id === feature.id);
+      if (match) {
+          countryIndex = countries.indexOf(match);
+      }
+
+      if (countryIndex !== -1) {
+          ctx.fillStyle = `rgb(${countryIndex % 256}, 0, 0)`;
+
+          const drawPoly = (rings: any[]) => {
+              ctx.beginPath();
+              rings.forEach((ring: any[], rIndex: number) => {
+                  ring.forEach((coord: number[], cIndex: number) => {
+                      // Convert Geo coords to Pixel coords
+                      // Lon: -180 to 180 -> 0 to width
+                      // Lat: -90 to 90 -> height to 0 (y inverted)
+                      const x = ((coord[0] + 180) / 360) * width;
+                      const y = ((90 - coord[1]) / 180) * height; // Inverted Y for Canvas
+
+                      if (cIndex === 0) ctx.moveTo(x, y);
+                      else ctx.lineTo(x, y);
+                  });
+                  if (rIndex === 0) ctx.closePath(); // Outer ring
+              });
+              ctx.fill();
+          };
+
+          if (feature.geometry.type === 'Polygon') {
+              drawPoly(feature.geometry.coordinates);
+          } else if (feature.geometry.type === 'MultiPolygon') {
+              feature.geometry.coordinates.forEach((poly: any) => drawPoly(poly));
+          }
+      }
+  });
+
+  const countryDataTexture = new THREE.CanvasTexture(canvas);
+  countryDataTexture.minFilter = THREE.LinearFilter;
+  countryDataTexture.magFilter = THREE.LinearFilter;
+  countryDataTexture.needsUpdate = true;
+
+  // Texture palette de couleurs (256 couleurs)
+  const paletteData = new Uint8Array(256 * 4);
+  // Initialiser avec transparence/noir
+  for(let i=0; i<256*4; i++) paletteData[i] = 0;
+
+  countries.forEach((country, i) => {
+    // Default color if not specified
+    const colorHex = (country as any).color || '#ffffff';
+    const color = hexToRgb(colorHex);
+    const idx = (i % 256) * 4;
+    paletteData[idx] = color.r;
+    paletteData[idx + 1] = color.g;
+    paletteData[idx + 2] = color.b;
+    paletteData[idx + 3] = 255;
+  });
+
+  const countryColorsTexture = new THREE.DataTexture(paletteData, 256, 1);
+  countryColorsTexture.needsUpdate = true;
+
+  return { countryDataTexture, countryColorsTexture };
+}

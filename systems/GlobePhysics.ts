@@ -1,17 +1,15 @@
+// GlobePhysics.ts - Empêcher la caméra de traverser le globe
 import * as THREE from 'three';
+import { useRef } from 'react';
 
 export interface GlobePhysicsConfig {
   globeRadius: number;
-  minAltitude: number; // Minimum distance above the surface
+  minAltitude: number; // Distance minimum au-dessus de la surface
   collisionResponse: 'clamp' | 'bounce' | 'slide';
 }
 
-/**
- * GlobePhysics - Prevents camera from traversing the globe surface
- * Uses spherical collision detection with configurable minimum altitude
- */
 export class GlobePhysics {
-  private config: GlobePhysicsConfig;
+  public config: GlobePhysicsConfig;
   private globeCenter: THREE.Vector3;
 
   constructor(config: GlobePhysicsConfig) {
@@ -20,39 +18,25 @@ export class GlobePhysics {
   }
 
   /**
-   * Get minimum allowed distance from globe center
+   * Vérifie et corrige la position de la caméra
+   * @returns true si collision détectée et corrigée
    */
-  getMinAllowedDistance(): number {
-    return this.config.globeRadius + this.config.minAltitude;
-  }
-
-  /**
-   * Check if position is inside the collision boundary
-   */
-  isInsideCollisionBoundary(position: THREE.Vector3): boolean {
-    return position.length() < this.getMinAllowedDistance();
-  }
-
-  /**
-   * Enforce collision - clamps camera position to stay outside the globe
-   * @returns true if collision was detected and corrected
-   */
-  enforceCollision(camera: THREE.Camera, controls?: any): boolean {
-    const cameraPos = camera.position;
+  enforceCollision(camera: THREE.Camera, controls: any): boolean {
+    const cameraPos = camera.position.clone();
     const distanceFromCenter = cameraPos.length();
-    const minAllowedDistance = this.getMinAllowedDistance();
+    const minAllowedDistance = this.config.globeRadius + this.config.minAltitude;
 
-    // Check for collision
+    // Collision détectée ?
     if (distanceFromCenter < minAllowedDistance) {
-      // Push camera back to surface + minimum altitude
-      const direction = cameraPos.clone().normalize();
+      // Repousser la caméra à la surface + altitude minimum
+      const direction = cameraPos.normalize();
       const newPosition = direction.multiplyScalar(minAllowedDistance);
 
       camera.position.copy(newPosition);
 
-      // Update OrbitControls if provided
+      // Mettre à jour OrbitControls
       if (controls) {
-        controls.minDistance = Math.max(controls.minDistance, minAllowedDistance);
+        controls.minDistance = minAllowedDistance;
         controls.update();
       }
 
@@ -63,118 +47,50 @@ export class GlobePhysics {
   }
 
   /**
-   * Calculate altitude above the globe surface
+   * Calcule l'altitude au-dessus de la surface du globe
    */
   getAltitude(position: THREE.Vector3): number {
     return position.length() - this.config.globeRadius;
   }
 
   /**
-   * Get the surface point directly below a position
+   * Obtient le point de surface le plus proche
    */
   getSurfacePoint(position: THREE.Vector3): THREE.Vector3 {
     return position.clone().normalize().multiplyScalar(this.config.globeRadius);
   }
 
   /**
-   * Get the surface normal at a given position (always pointing outward from center)
+   * Calcule la normale à la surface au point donné
    */
   getSurfaceNormal(position: THREE.Vector3): THREE.Vector3 {
     return position.clone().normalize();
   }
 
   /**
-   * Raycast from a point in a direction to find intersection with globe surface
-   * Uses ray-sphere intersection formula
+   * Raycasting vers la surface du globe
    */
   raycastToSurface(origin: THREE.Vector3, direction: THREE.Vector3): THREE.Vector3 | null {
-    const d = direction.clone().normalize();
-    const o = origin.clone();
-    const r = this.config.globeRadius;
-
-    // Ray-sphere intersection: |o + td|^2 = r^2
-    // t^2(d.d) + 2t(o.d) + (o.o - r^2) = 0
-    const a = d.dot(d);
-    const b = 2 * o.dot(d);
-    const c = o.dot(o) - r * r;
+    // Intersection rayon-sphère
+    const a = direction.dot(direction);
+    const b = 2 * origin.dot(direction);
+    const c = origin.dot(origin) - this.config.globeRadius * this.config.globeRadius;
 
     const discriminant = b * b - 4 * a * c;
 
     if (discriminant < 0) return null;
 
-    // Find the nearest positive intersection
-    const sqrtDisc = Math.sqrt(discriminant);
-    const t1 = (-b - sqrtDisc) / (2 * a);
-    const t2 = (-b + sqrtDisc) / (2 * a);
+    const t = (-b - Math.sqrt(discriminant)) / (2 * a);
 
-    const t = t1 > 0 ? t1 : (t2 > 0 ? t2 : null);
+    if (t < 0) return null;
 
-    if (t === null) return null;
-
-    return o.add(d.multiplyScalar(t));
-  }
-
-  /**
-   * Get lat/lon coordinates from a 3D position
-   */
-  positionToLatLon(position: THREE.Vector3): { lat: number; lon: number } {
-    const normalized = position.clone().normalize();
-
-    // Convert from cartesian to spherical
-    const lat = 90 - Math.acos(normalized.y) * (180 / Math.PI);
-    const lon = Math.atan2(normalized.z, -normalized.x) * (180 / Math.PI) - 180;
-
-    return { lat, lon: lon > 180 ? lon - 360 : (lon < -180 ? lon + 360 : lon) };
-  }
-
-  /**
-   * Calculate great circle distance between two points on the surface
-   */
-  greatCircleDistance(pos1: THREE.Vector3, pos2: THREE.Vector3): number {
-    const n1 = pos1.clone().normalize();
-    const n2 = pos2.clone().normalize();
-    const angle = Math.acos(Math.max(-1, Math.min(1, n1.dot(n2))));
-    return angle * this.config.globeRadius;
-  }
-
-  /**
-   * Update configuration
-   */
-  updateConfig(newConfig: Partial<GlobePhysicsConfig>): void {
-    this.config = { ...this.config, ...newConfig };
-  }
-
-  /**
-   * Get current configuration
-   */
-  getConfig(): GlobePhysicsConfig {
-    return { ...this.config };
+    return origin.clone().add(direction.clone().multiplyScalar(t));
   }
 }
 
-// Default configuration
-export const DEFAULT_GLOBE_PHYSICS_CONFIG: GlobePhysicsConfig = {
-  globeRadius: 5,
-  minAltitude: 0.15, // Stay at least 0.15 units above surface
-  collisionResponse: 'clamp'
-};
+// Hook React pour utiliser la physique
+export function useGlobePhysics(config: GlobePhysicsConfig) {
+  const physicsRef = useRef(new GlobePhysics(config));
 
-// Singleton instance for global access
-let globePhysicsInstance: GlobePhysics | null = null;
-
-/**
- * Get or create the global GlobePhysics instance
- */
-export function getGlobePhysics(config?: GlobePhysicsConfig): GlobePhysics {
-  if (!globePhysicsInstance) {
-    globePhysicsInstance = new GlobePhysics(config || DEFAULT_GLOBE_PHYSICS_CONFIG);
-  }
-  return globePhysicsInstance;
-}
-
-/**
- * Reset the global GlobePhysics instance (useful for testing)
- */
-export function resetGlobePhysics(): void {
-  globePhysicsInstance = null;
+  return physicsRef.current;
 }

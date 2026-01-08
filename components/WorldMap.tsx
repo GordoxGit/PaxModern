@@ -1,65 +1,70 @@
 import React, { useMemo, Suspense, useRef, useState, useEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useLoader } from '@react-three/fiber';
 import { Stars, Loader, Billboard, Text } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useGameStore } from '../stores/gameStore';
 import { latLngToVector3 } from '../utils/geo';
-import { VectorBorders } from './VectorBorders';
-import { CityMeshes } from './CityMeshes';
+import { VectorBordersLine } from './VectorBordersLine';
+import { ProceduralBuildings } from './ProceduralBuildings';
+import { ProceduralRoads } from './ProceduralRoads';
 import { VegetationSystem } from './VegetationSystem';
-import { RoadNetwork } from './RoadNetwork';
 import { CameraController } from './CameraController';
 import { EarthSDF } from './EarthSDF';
-import { useLODStore, getLODFromDistance, LOD_CONFIGS } from '../systems/LODManager';
+import { useLODStore, useLODFeatures, getLODFromDistance } from '../systems/LODManager';
 
-// Globe configuration
-const GLOBE_RADIUS = 5;
-
-// --- THE EARTH GROUP ---
-const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => {
+// --- LE GLOBE ---
+const EarthGroup = () => {
   const { countries, selectCountry, selectedCountry } = useGameStore();
-  const [cameraDistance, setCameraDistance] = useState(16);
+  const { currentLOD, setLOD } = useLODStore();
+  const features = useLODFeatures();
 
-  // Get LOD state from Zustand store
-  const {
-    currentLOD,
-    features,
-    checkAndUpdateLOD,
-    isTransitioning,
-    transitionProgress,
-    updateTransition,
-    transitionStartTime,
-    transitionDuration,
-  } = useLODStore();
+  const geoJsonData = useLoader(THREE.FileLoader, '/assets/countries.geo.json', (loader) => {
+    loader.setResponseType('json');
+  });
+  // Note: JSON.parse is removed because loader setResponseType('json') returns object
+  const geoJson = useMemo(() => geoJsonData, [geoJsonData]);
+
+  // Extraction de toutes les villes pour le rendu
+  const allCities = useMemo(() => {
+      const cities: any[] = [];
+      countries.forEach(c => {
+          if (c.cities) cities.push(...c.cities);
+      });
+      return cities;
+  }, [countries]);
+
+  const [cameraDistance, setCameraDistance] = useState(15);
 
   // Update camera distance and LOD on each frame
   useFrame((state) => {
     const dist = state.camera.position.length();
 
-    // Update distance state if significant change
-    if (Math.abs(dist - cameraDistance) > 0.02) {
-      setCameraDistance(dist);
-      onZoomChange(dist);
+    // UTILISATION DE LA NOUVELLE LOGIQUE STABLE
+    const newLOD = getLODFromDistance(dist, currentLOD);
 
-      // Check for LOD transition
-      checkAndUpdateLOD(dist);
+    // On ne met à jour que si ça a VRAIMENT changé (évite le spam console/render)
+    if (newLOD !== currentLOD) {
+      setLOD(newLOD);
     }
 
-    // Update transition progress if transitioning
-    if (isTransitioning && transitionStartTime > 0) {
-      const elapsed = (performance.now() - transitionStartTime) / 1000;
-      const progress = Math.min(elapsed / transitionDuration, 1);
-      updateTransition(progress);
+    if (Math.abs(dist - cameraDistance) > 0.05) {
+      setCameraDistance(dist);
     }
   });
 
+  // Adaptation du LOD string pour VegetationSystem qui attend "CITY"
+  // Notre LODManager utilise "CITY_BUILDER"
+  const vegetationLOD = currentLOD === 'CITY_BUILDER' ? 'CITY' : currentLOD;
+
   return (
     <group rotation={[0, 0, 0.2]}>
-      {/* 1. THE EARTH (SDF Procedural Globe) */}
+      {/* 1. LA TERRE (SDF System) */}
+      {/* FIX TEXTURE : Segments fixes à 128 pour éviter la reconstruction */}
       <EarthSDF
-        lodLevel={currentLOD}
-        cameraDistance={cameraDistance}
+        radius={5}
+        segments={128}
+        countries={countries}
       />
 
       {/* 2. ATMOSPHERE (Subtle) */}
@@ -75,25 +80,32 @@ const EarthGroup = ({ onZoomChange }: { onZoomChange: (d: number) => void }) => 
         />
       </mesh>
 
-      {/* 3. CITIES (Buildings) */}
-      {features.showBuildings && (
-        <CityMeshes lodLevel={currentLOD} />
+      {/* 3. VILLES EN 3D (Procedural) - OPTIMISÉ */}
+      {/* FIX PERF : On ne démonte jamais le composant, on change juste 'visible' */}
+      <ProceduralBuildings
+          cities={allCities}
+          globeRadius={5.03}
+          visible={features.showBuildings}
+      />
+
+      {/* 4. VÉGÉTATION */}
+      {features.showVegetation && <VegetationSystem lodLevel={vegetationLOD} />}
+
+      {/* 5. INFRASTRUCTURE (Procedural) */}
+      {(features.showHighways || features.showNationalRoads) && (
+        <ProceduralRoads
+            cities={allCities}
+            globeRadius={5}
+        />
       )}
 
-      {/* 4. VEGETATION (Only in CITY_BUILDER mode) */}
-      {features.showVegetation && (
-        <VegetationSystem lodLevel={currentLOD} />
-      )}
-
-      {/* 5. ROADS */}
-      {(features.showHighways || features.showNationalRoads ||
-        features.showRegionalRoads || features.showLocalRoads) && (
-        <RoadNetwork lodLevel={currentLOD} />
-      )}
-
-      {/* 6. BORDERS (Vector lines) */}
-      {features.showBorders && (
-        <VectorBorders radius={GLOBE_RADIUS + 0.01} lodLevel={currentLOD} />
+      {/* 7. FRONTIÈRES VECTORIELLES */}
+      {features.showBorders && geoJson && (
+        <VectorBordersLine
+           geoJson={geoJson}
+           radius={5}
+           currentLOD={currentLOD}
+        />
       )}
 
       {/* 7. STRATEGIC MARKERS (Country labels) */}
@@ -204,12 +216,8 @@ export const WorldMap: React.FC = () => {
     <div className="w-full h-full bg-[#050a14] relative">
       <Canvas
         camera={{ position: [0, 0, 16], fov: 45 }}
-        gl={{
-          antialias: true,
-          powerPreference: 'high-performance',
-          alpha: false,
-        }}
-        dpr={[1, 2]}
+        gl={{ antialias: true, powerPreference: "high-performance" }}
+        dpr={[1, 1.5]}
         shadows
       >
         <Suspense fallback={null}>
@@ -228,22 +236,15 @@ export const WorldMap: React.FC = () => {
           {/* Starfield */}
           <Stars radius={300} depth={50} count={3000} factor={4} fade />
 
-          {/* Earth and all its components */}
-          <EarthGroup onZoomChange={() => {}} />
+          <EarthGroup />
 
-          {/* Camera Controller with physics and GSAP transitions */}
-          <CameraController onZoomChange={() => {}} />
+          <CameraController />
 
           {/* Post-processing effects */}
           <EffectComposer disableNormalPass>
-            <Bloom
-              luminanceThreshold={0.5}
-              mipmapBlur
-              intensity={0.8}
-              radius={0.4}
-            />
-            <Noise opacity={0.008} />
-            <Vignette eskil={false} offset={0.1} darkness={1.0} />
+            <Bloom luminanceThreshold={0.5} mipmapBlur intensity={1.0} radius={0.5} />
+            <Noise opacity={0.01} />
+            <Vignette eskil={false} offset={0.1} darkness={1.1} />
           </EffectComposer>
         </Suspense>
       </Canvas>

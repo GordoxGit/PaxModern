@@ -1,179 +1,197 @@
-import React, { useRef, useCallback, useEffect } from 'react';
+// CameraController.tsx - REFONTE COMPLÈTE
+import { useRef, useState, useCallback } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import gsap from 'gsap';
-import { GlobePhysics, DEFAULT_GLOBE_PHYSICS_CONFIG } from '../systems/GlobePhysics';
-import { useLODStore, LOD_CONFIGS, getLODFromDistance, LODLevel } from '../systems/LODManager';
+import { useGlobePhysics } from '../systems/GlobePhysics';
+import { useLODStore, LODLevel } from '../systems/LODManager';
 
-// Globe configuration
+// === CONFIGURATION DES MODES ===
+const CAMERA_MODES = {
+  GLOBE: {
+    name: 'GLOBE',
+    minDistance: 12,
+    maxDistance: 50,
+    targetMode: 'center', // Target fixe au centre
+    rotateSpeed: 0.8,
+    zoomSpeed: 1.2,
+    panSpeed: 0,
+    maxPolarAngle: Math.PI * 0.85, // 153° - pas de vue horizon
+    fov: 45,
+  },
+  CONTINENTAL: {
+    name: 'CONTINENTAL',
+    minDistance: 6,
+    maxDistance: 12,
+    targetMode: 'surface_follow', // Target suit la surface
+    rotateSpeed: 0.5,
+    zoomSpeed: 1.0,
+    panSpeed: 0.3,
+    maxPolarAngle: Math.PI * 0.85,
+    fov: 50,
+  },
+  REGIONAL: {
+    name: 'REGIONAL',
+    minDistance: 3,
+    maxDistance: 6,
+    targetMode: 'surface_lock', // Target verrouillé sur surface
+    rotateSpeed: 0.3,
+    zoomSpeed: 0.8,
+    panSpeed: 0.6,
+    maxPolarAngle: Math.PI * 0.9, // 162° - légère vue horizon
+    fov: 55,
+  },
+  CITY_BUILDER: {
+    name: 'CITY_BUILDER',
+    minDistance: 0.5,
+    maxDistance: 3,
+    targetMode: 'surface_lock',
+    rotateSpeed: 0.2,
+    zoomSpeed: 0.5,
+    panSpeed: 1.0,
+    maxPolarAngle: Math.PI * 0.97, // 175° - vue horizon complète
+    fov: 60,
+  },
+} as const;
+
+type CameraMode = keyof typeof CAMERA_MODES;
+
 const GLOBE_RADIUS = 5;
-const MIN_ALTITUDE = 0.15;
-const TRANSITION_DURATION = 0.5; // seconds
+const MIN_ALTITUDE = 0.1;
+const TRANSITION_DURATION = 0.5; // secondes
 
 interface CameraControllerProps {
-  onZoomChange?: (altitude: number) => void;
+  onZoomChange?: (d: number) => void;
 }
 
-export const CameraController: React.FC<CameraControllerProps> = ({ onZoomChange }) => {
-  const controlsRef = useRef<any>(null);
+export function CameraController({ onZoomChange }: CameraControllerProps) {
   const { camera, gl } = useThree();
+  const controlsRef = useRef<any>(null);
 
-  // Physics system
-  const physicsRef = useRef(new GlobePhysics(DEFAULT_GLOBE_PHYSICS_CONFIG));
+  const [currentMode, setCurrentMode] = useState<CameraMode>('GLOBE');
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const lastModeRef = useRef<CameraMode>('GLOBE');
 
-  // Mode tracking
-  const currentModeRef = useRef<LODLevel>('GLOBE');
-  const isTransitioningRef = useRef(false);
+  // Store LOD
+  const setLOD = useLODStore((state) => state.setLOD);
 
-  // Surface target for non-globe modes
+  // Surface point pour target
   const surfaceTargetRef = useRef(new THREE.Vector3(0, 0, GLOBE_RADIUS));
 
-  // GSAP timeline reference for cleanup
-  const timelineRef = useRef<gsap.core.Timeline | null>(null);
+  // Physique du globe
+  const physics = useGlobePhysics({
+    globeRadius: GLOBE_RADIUS,
+    minAltitude: MIN_ALTITUDE, // 0.1 unité au-dessus de la surface minimum
+    collisionResponse: 'clamp'
+  });
 
-  // LOD store actions
-  const { checkAndUpdateLOD, startTransition, endTransition } = useLODStore();
+  // === DÉTECTION DU MODE SELON DISTANCE ===
+  const getModeFromDistance = useCallback((distance: number): CameraMode => {
+    if (distance > 12) return 'GLOBE';
+    if (distance > 6) return 'CONTINENTAL';
+    if (distance > 3) return 'REGIONAL';
+    return 'CITY_BUILDER';
+  }, []);
 
-  // Transition between camera modes using GSAP
-  const transitionToMode = useCallback((fromMode: LODLevel, toMode: LODLevel) => {
-    if (isTransitioningRef.current) return;
+  // === TRANSITION ENTRE MODES (GSAP) ===
+  const transitionToMode = useCallback((fromMode: CameraMode, toMode: CameraMode) => {
+    if (isTransitioning) return;
 
     const controls = controlsRef.current;
     if (!controls) return;
 
-    isTransitioningRef.current = true;
+    setIsTransitioning(true);
 
-    // Kill any existing timeline
-    if (timelineRef.current) {
-      timelineRef.current.kill();
-    }
+    const fromConfig = CAMERA_MODES[fromMode];
+    const toConfig = CAMERA_MODES[toMode];
 
-    const fromConfig = LOD_CONFIGS[fromMode];
-    const toConfig = LOD_CONFIGS[toMode];
-
-    // Create GSAP timeline for coordinated animations
-    const tl = gsap.timeline({
-      onComplete: () => {
-        isTransitioningRef.current = false;
-        currentModeRef.current = toMode;
-        endTransition();
-      },
-    });
-
-    timelineRef.current = tl;
-
-    // Animate OrbitControls parameters
-    tl.to(controls, {
+    // Animer les paramètres de OrbitControls
+    gsap.to(controls, {
       rotateSpeed: toConfig.rotateSpeed,
       zoomSpeed: toConfig.zoomSpeed,
       panSpeed: toConfig.panSpeed,
       maxPolarAngle: toConfig.maxPolarAngle,
-      minPolarAngle: toConfig.minPolarAngle,
       duration: TRANSITION_DURATION,
       ease: 'power2.inOut',
-    }, 0);
+    });
 
-    // Animate camera FOV
-    const perspCamera = camera as THREE.PerspectiveCamera;
-    tl.to(perspCamera, {
+    // Animer le FOV
+    gsap.to(camera, {
       fov: toConfig.fov,
       duration: TRANSITION_DURATION,
       ease: 'power2.inOut',
-      onUpdate: () => perspCamera.updateProjectionMatrix(),
-    }, 0);
+      onUpdate: () => camera.updateProjectionMatrix(),
+    });
 
-    // Handle target transition based on target modes
+    // Transition du target si nécessaire
     if (fromConfig.targetMode !== toConfig.targetMode) {
       const currentTarget = controls.target.clone();
       let newTarget: THREE.Vector3;
 
       if (toConfig.targetMode === 'center') {
-        // Moving to GLOBE mode - center target
         newTarget = new THREE.Vector3(0, 0, 0);
       } else {
-        // Moving to surface mode - target on globe surface
+        // Calculer le point de surface sous la caméra
         newTarget = camera.position.clone().normalize().multiplyScalar(GLOBE_RADIUS);
-        surfaceTargetRef.current.copy(newTarget);
       }
 
-      // Animate target position
-      tl.to(controls.target, {
+      gsap.to(controls.target, {
         x: newTarget.x,
         y: newTarget.y,
         z: newTarget.z,
         duration: TRANSITION_DURATION,
         ease: 'power2.inOut',
-      }, 0);
+        onComplete: () => {
+          setIsTransitioning(false);
+          setCurrentMode(toMode);
+          setLOD(toMode);
+        },
+      });
+    } else {
+      setTimeout(() => {
+        setIsTransitioning(false);
+        setCurrentMode(toMode);
+        setLOD(toMode);
+      }, TRANSITION_DURATION * 1000);
     }
+  }, [isTransitioning, camera, setLOD]);
 
-    // Update enablePan at midpoint of transition
-    tl.call(() => {
-      controls.enablePan = toConfig.enablePan;
-    }, [], TRANSITION_DURATION / 2);
-
-    // Start LOD transition in store
-    startTransition(fromMode, toMode);
-
-  }, [camera, startTransition, endTransition]);
-
-  // Main frame loop
+  // === MAIN LOOP ===
   useFrame(() => {
     const controls = controlsRef.current;
     if (!controls) return;
 
     const distance = camera.position.length();
+    if (onZoomChange) onZoomChange(distance);
 
-    // === 1. COLLISION CHECK (HIGHEST PRIORITY) ===
-    const physics = physicsRef.current;
-    const minAllowedDistance = physics.getMinAllowedDistance();
+    // === 1. COLLISION PHYSIQUE (PRIORITÉ ABSOLUE) ===
+    physics.enforceCollision(camera, controls);
 
-    if (distance < minAllowedDistance) {
-      // Push camera back to minimum altitude
-      camera.position.normalize().multiplyScalar(minAllowedDistance);
-      controls.update();
+    // === 2. DÉTECTION CHANGEMENT DE MODE ===
+    const newMode = getModeFromDistance(distance);
+
+    if (newMode !== lastModeRef.current && !isTransitioning) {
+      console.log(`Mode transition: ${lastModeRef.current} → ${newMode}`);
+      transitionToMode(lastModeRef.current, newMode);
+      lastModeRef.current = newMode;
     }
 
-    // === 2. MODE DETECTION & TRANSITION ===
-    const newMode = getLODFromDistance(distance);
-
-    if (newMode !== currentModeRef.current && !isTransitioningRef.current) {
-      transitionToMode(currentModeRef.current, newMode);
-    }
-
-    // === 3. UPDATE SURFACE TARGET (for non-globe modes, only when not transitioning) ===
-    const currentConfig = LOD_CONFIGS[currentModeRef.current];
-
-    if (currentConfig.targetMode === 'surface_lock' && !isTransitioningRef.current) {
-      // Calculate surface point directly under camera
+    // === 3. MISE À JOUR TARGET SURFACE (seulement si mode surface) ===
+    const config = CAMERA_MODES[currentMode];
+    if (config.targetMode === 'surface_lock' && !isTransitioning) {
+      // Calculer le point de surface le plus proche de la direction de la caméra
       const surfacePoint = camera.position.clone().normalize().multiplyScalar(GLOBE_RADIUS);
       surfaceTargetRef.current.copy(surfacePoint);
 
-      // Gently update target to follow surface (very subtle, no jerky movements)
-      // This only happens in surface_lock mode and uses a very small factor
-      controls.target.lerp(surfacePoint, 0.02);
+      // NE PAS modifier controls.target ici en continu !
+      // Le target est mis à jour UNIQUEMENT lors des transitions
     }
 
-    // === 4. DYNAMIC minDistance ===
-    // Update minDistance based on current mode to prevent zooming too close
-    const effectiveMinDistance = currentConfig.targetMode === 'center'
+    // === 4. MISE À JOUR minDistance SELON MODE ===
+    controls.minDistance = config.targetMode === 'center'
       ? GLOBE_RADIUS + 1
-      : minAllowedDistance;
-
-    if (controls.minDistance !== effectiveMinDistance && !isTransitioningRef.current) {
-      controls.minDistance = effectiveMinDistance;
-    }
-
-    // === 5. UPDATE CONTROLS ===
-    controls.update();
-
-    // === 6. NOTIFY PARENT ===
-    if (onZoomChange) {
-      onZoomChange(distance);
-    }
-
-    // === 7. UPDATE LOD STORE ===
-    checkAndUpdateLOD(distance);
+      : GLOBE_RADIUS + MIN_ALTITUDE;
   });
 
   // Cleanup on unmount
@@ -189,25 +207,22 @@ export const CameraController: React.FC<CameraControllerProps> = ({ onZoomChange
     <OrbitControls
       ref={controlsRef}
       args={[camera, gl.domElement]}
-      // Initial values (GLOBE mode)
-      rotateSpeed={LOD_CONFIGS.GLOBE.rotateSpeed}
-      zoomSpeed={LOD_CONFIGS.GLOBE.zoomSpeed}
-      panSpeed={LOD_CONFIGS.GLOBE.panSpeed}
-      // Limits
+
+      // Valeurs initiales (mode GLOBE)
+      rotateSpeed={CAMERA_MODES.GLOBE.rotateSpeed}
+      zoomSpeed={CAMERA_MODES.GLOBE.zoomSpeed}
+      panSpeed={CAMERA_MODES.GLOBE.panSpeed}
+
+      // Limites
       minDistance={GLOBE_RADIUS + 1}
-      maxDistance={80}
-      maxPolarAngle={LOD_CONFIGS.GLOBE.maxPolarAngle}
-      minPolarAngle={LOD_CONFIGS.GLOBE.minPolarAngle}
-      // Behavior
+      maxDistance={50}
+      maxPolarAngle={CAMERA_MODES.GLOBE.maxPolarAngle}
+
+      // Comportement
       enableDamping={true}
       dampingFactor={0.05}
-      enablePan={false}
+      enablePan={true}
       screenSpacePanning={false}
-      // Touch settings
-      touches={{
-        ONE: THREE.TOUCH.ROTATE,
-        TWO: THREE.TOUCH.DOLLY_PAN,
-      }}
     />
   );
-};
+}
